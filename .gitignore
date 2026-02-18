@@ -1,0 +1,48 @@
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build output
+dist/
+build/
+out/
+
+# TypeScript
+*.tsbuildinfo
+
+# Logs
+logs/
+*.log
+
+# OS files
+.DS_Store
+
+# SQLite / local DB
+*.sqlite
+*.db
+
+# Editor
+.vscode/
+.idea/
+
+# Temp
+tmp/
+temp/
+
+
+# Data
+data/
+!data/.gitkeep
+
+# Logs
+*.log
+
+# Claude Code
+.claude/
