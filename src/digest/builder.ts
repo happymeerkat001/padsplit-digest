@@ -4,7 +4,7 @@ import { createDigest, getUnsentClassifiedItems, markItemsSent, type DigestItem 
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import { sendDigestEmail } from '../gmail/send.js';
-import type { ThermostatReading } from '../scraper/honeywell.js';
+import type { ThermostatReading } from '../scraper/honeywell.js'; // memory 
 
 interface SenderGroup {
   key: string;
