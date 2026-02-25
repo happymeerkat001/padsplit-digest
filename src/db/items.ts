@@ -187,7 +187,7 @@ export function markItemsSent(ids: number[], digestId: number): void {
       digest_id = ?,
       digest_sent_at = datetime('now'),
       status = 'sent'
-    WHERE id = ?
+    WHERE id = ? AND status = 'classified'
   `);
 
   const transaction = db.transaction(() => {
@@ -216,4 +216,12 @@ export function createDigest(digest: Omit<Digest, 'id'>): number {
   );
 
   return result.lastInsertRowid as number;
+}
+
+export function getLastDigestHash(): string | null {
+  const db = getDb();
+  const row = db
+    .prepare('SELECT visible_items_hash FROM digests ORDER BY id DESC LIMIT 1')
+    .get() as { visible_items_hash: string | null } | undefined;
+  return row?.visible_items_hash ?? null;
 }

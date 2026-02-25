@@ -1,10 +1,13 @@
 import cron from 'node-cron';
+import { readdirSync, unlinkSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { config, validateConfig } from './config.js';
 import { closeDb, getDb } from './db/init.js';
 import { insertItem, itemExists } from './db/items.js';
 import { classifyPendingItems } from './classifier/index.js';
 import { buildAndSendDigest } from './digest/builder.js';
 import { fetchPadSplitEmails, isLinkOnlyEmail } from './gmail/fetch.js';
+import { disableBrowser, enableBrowser } from './scraper/browser.js';
 import { cleanup as cleanupScraper, resolveLinks } from './scraper/resolver.js';
 import {
   closeHoneywellBrowserContext,
@@ -17,6 +20,8 @@ import { logger } from './utils/logger.js';
 let lastDeployedAt = 0;
 let isPipelineRunning = false;
 const SCRAPER_TIMEOUT_MS = 120_000;
+const OUT_DIR = resolve(process.cwd(), 'out');
+const MAX_OUT_REPORT_FILES = 500;
 
 async function withTimeout<T>(task: Promise<T>, step: string): Promise<T> {
   const timeoutToken = Symbol('timeout');
@@ -48,8 +53,32 @@ function isTimeoutError(err: unknown): boolean {
   return err instanceof Error && err.name === 'TimeoutError';
 }
 
+function pruneOutReports(): void {
+  try {
+    const reports = readdirSync(OUT_DIR)
+      .filter((name) => /^digest-\d{8}-\d{6}\.html$/.test(name))
+      .sort((a, b) => b.localeCompare(a));
+
+    const stale = reports.slice(MAX_OUT_REPORT_FILES);
+    for (const filename of stale) {
+      try {
+        unlinkSync(resolve(OUT_DIR, filename));
+      } catch {
+        // Ignore per-file cleanup failures.
+      }
+    }
+
+    if (stale.length > 0) {
+      logger.info(`Pruned ${stale.length} old out reports`);
+    }
+  } catch {
+    // out/ may not exist yet.
+  }
+}
+
 async function runPipeline(): Promise<void> {
   const startedAt = Date.now();
+  enableBrowser();
   logger.info('Pipeline started');
 
   try {
@@ -97,6 +126,7 @@ async function runPipeline(): Promise<void> {
             error: String(cleanupErr),
           });
         }
+        disableBrowser();
       } else {
         logger.error('Link resolution failed; continuing without resolved content', {
           error: String(err),
@@ -137,12 +167,10 @@ async function runPipeline(): Promise<void> {
     }
 
     logger.info('Step 5: Building digest report');
-    const digest = await buildAndSendDigest(thermostats);
+    const digest = await buildAndSendDigest(thermostats, newItems);
 
-    logger.info('Step 6: Publishing to Firebase Hosting');
-    const published = publishToPublic(digest.reportPath);
-    const historyPath = generateHistoryPage();
-
+    let published = { latestPath: '', archivePath: '' };
+    let historyPath = '';
     const deploySkipped = process.argv.includes('--no-deploy');
     let deployed = false;
     let deployIntervalMinutes = config.digest.deployIntervalMinutes;
@@ -151,21 +179,31 @@ async function runPipeline(): Promise<void> {
       deployIntervalMinutes = 30;
     }
 
-    if (deploySkipped) {
-      logger.info('Firebase deploy skipped (--no-deploy flag present)');
-    } else {
-      const msSinceDeploy = Date.now() - lastDeployedAt;
-      const deployIntervalMs = deployIntervalMinutes * 60_000;
+    if (digest.reportPath) {
+      logger.info('Step 6: Publishing to Firebase Hosting');
+      published = publishToPublic(digest.reportPath);
+      historyPath = generateHistoryPage();
+      pruneOutReports();
 
-      if (msSinceDeploy >= deployIntervalMs) {
-        deployed = firebaseDeploy();
-        if (deployed) {
-          lastDeployedAt = Date.now();
-        }
+      if (deploySkipped) {
+        logger.info('Firebase deploy skipped (--no-deploy flag present)');
       } else {
-        const nextIn = Math.ceil((deployIntervalMs - msSinceDeploy) / 60_000);
-        logger.info(`Firebase deploy throttled - next deploy in ~${nextIn} min`);
+        const msSinceDeploy = Date.now() - lastDeployedAt;
+        const deployIntervalMs = deployIntervalMinutes * 60_000;
+
+        if (msSinceDeploy >= deployIntervalMs) {
+          deployed = firebaseDeploy();
+          if (deployed) {
+            lastDeployedAt = Date.now();
+          }
+        } else {
+          const nextIn = Math.ceil((deployIntervalMs - msSinceDeploy) / 60_000);
+          logger.info(`Firebase deploy throttled - next deploy in ~${nextIn} min`);
+        }
       }
+    } else {
+      logger.info('Step 6: Skipped - digest unchanged');
+      logger.info('Skipped no-op digest publish/deploy', { itemCount: digest.itemCount });
     }
 
     logger.info('Pipeline complete', {
@@ -256,6 +294,8 @@ async function main(): Promise<void> {
 async function shutdown(): Promise<void> {
   logger.info('Shutting down');
   await cleanupScraper();
+  await closeHoneywellBrowserContext();
+  logger.info('Shutdown cleanup complete');
   closeDb();
   process.exit(0);
 }

@@ -4,8 +4,21 @@ import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 
 let context: BrowserContext | null = null;
+let disabled = false;
+
+export function disableBrowser(): void {
+  disabled = true;
+}
+
+export function enableBrowser(): void {
+  disabled = false;
+}
 
 export async function getBrowserContext(): Promise<BrowserContext> {
+  if (disabled) {
+    throw new Error('Browser disabled after timeout');
+  }
+
   if (context) {
     return context;
   }

@@ -117,7 +117,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'; // output - write to filesystem. 
 import { resolve } from 'node:path'; // output - 
 import { createHash } from 'node:crypto';
-import { createDigest, getVisibleClassifiedItems, markItemsSent, type DigestItem } from '../db/items.js';
+import { createDigest, getLastDigestHash, getVisibleClassifiedItems, markItemsSent, type DigestItem } from '../db/items.js';
 import { config } from '../config.js'; // input - external configuration that influences how the digest is built and sent, including sender categories, schedule timezone, and email sending settings
 import { logger } from '../utils/logger.js'; // output - logging to console or file for observability of the digest building process
 import { sendDigestEmail } from '../gmail/send.js'; // output - write to external system (Gmail API) to send the digest email
@@ -416,20 +416,29 @@ function buildEmailSummary(groups: SenderGroup[], reportPath: string): string {
 }
 
 export async function buildAndSendDigest( // Orchestration - coordinates the entire digest building and sending process, acting as the main function that ties together data retrieval, transformation, persistence, and optional email sending based on configuration and command-line arguments
-  thermostatReadings: ThermostatReading[] = []
+  thermostatReadings: ThermostatReading[] = [],
+  newItemCount = 0
 ): Promise<{ sent: boolean; itemCount: number; reportPath: string }> {
 const items = getVisibleClassifiedItems(
   config.digest.visibilityWindowHours
 );  const groups = groupBySenderCategory(items);  
 
-  const now = new Date(); // input -external data representing the current date and time, used for timestamping the generated digest report and determining which items to include based on their received time, as well as for formatting the report header with the generation time in the configured timezone
-  const html = buildDigestHtml(groups, thermostatReadings, now); // computation - transforms the grouped items and thermostat readings into a complete HTML document representing the digest report, applying styling and formatting to create a visually organized summary of the day's activity that can be saved as a file and optionally sent via email
-  const reportPath = writeDigestReport(html, now); // output - writes the generated HTML digest report to the filesystem, creating a new file with a timestamped name in the 'out' directory, and returns the path to the saved report for logging and potential inclusion in the email summary, ensuring that there is a persistent record of the generated digest that can be accessed later if needed
   const urgentCount = items.filter((item) => item.urgency === 'high').length;
   const itemIds = items.map((item) => item.id).filter((id): id is number => Number.isInteger(id));
   const visibleItemsHash = createHash('sha256')
     .update(JSON.stringify(itemIds))
     .digest('hex');
+  const lastHash = getLastDigestHash();
+  if (lastHash === visibleItemsHash && newItemCount === 0) {
+    logger.info('Digest unchanged - skipping no-op digest', {
+      visibleItemsHash,
+      itemCount: items.length,
+    });
+    return { sent: false, itemCount: items.length, reportPath: '' };
+  }
+  const now = new Date(); // input -external data representing the current date and time, used for timestamping the generated digest report and determining which items to include based on their received time, as well as for formatting the report header with the generation time in the configured timezone
+  const html = buildDigestHtml(groups, thermostatReadings, now); // computation - transforms the grouped items and thermostat readings into a complete HTML document representing the digest report, applying styling and formatting to create a visually organized summary of the day's activity that can be saved as a file and optionally sent via email
+  const reportPath = writeDigestReport(html, now); // output - writes the generated HTML digest report to the filesystem, creating a new file with a timestamped name in the 'out' directory, and returns the path to the saved report for logging and potential inclusion in the email summary, ensuring that there is a persistent record of the generated digest that can be accessed later if needed
   const emailSendExplicitlyEnabled =
     config.runtime.enableEmailSending && process.argv.includes('--send-email'); // internal input - checks both configuration and command-line arguments to determine whether the digest email should actually be sent, allowing for flexibility in running the digest generation process without sending emails (e.g., for testing or manual review) while still providing an easy way to enable email sending when desired by passing the appropriate flag and having the necessary configuration in place
 
