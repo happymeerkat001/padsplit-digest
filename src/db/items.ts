@@ -32,7 +32,15 @@ export interface Digest {
   urgent_count: number;
   recipient: string;
   gmail_message_id?: string;
+  visible_items_hash?: string;
   status?: string;
+}
+
+// Get the most recent received_at timestamp from all items
+export function getLastReceivedTimestamp(): string | null {
+  const db = getDb();
+  const row = db.prepare('SELECT MAX(received_at) as last_received FROM digest_items').get() as { last_received: string | null } | undefined;
+  return row?.last_received ?? null;
 }
 
 // Check if item exists by external_id
@@ -82,12 +90,53 @@ export function getPendingItems(): DigestItem[] {
   `).all() as DigestItem[];
 }
 
-// Get classified items not yet sent
-export function getUnsentClassifiedItems(): DigestItem[] {
+// Get classified items not yet sent (optionally bounded by a visibility window)
+export function getUnsentClassifiedItems(windowHours?: number): DigestItem[] {
   const db = getDb();
+
+  if (
+    windowHours == null ||
+    !Number.isFinite(windowHours) ||
+    windowHours <= 0
+  ) {
+    return db.prepare(`
+      SELECT * FROM digest_items WHERE status = 'classified' ORDER BY urgency DESC, received_at ASC
+    `).all() as DigestItem[];
+  }
+
+  const cutoff = new Date(Date.now() - windowHours * 3_600_000).toISOString();
+
   return db.prepare(`
-    SELECT * FROM digest_items WHERE status = 'classified' ORDER BY urgency DESC, received_at ASC
-  `).all() as DigestItem[];
+    SELECT * FROM digest_items
+    WHERE status = 'classified' AND received_at >= ?
+    ORDER BY urgency DESC, received_at ASC
+  `).all(cutoff) as DigestItem[];
+}
+
+export function getVisibleClassifiedItems(windowHours: number): DigestItem[] {
+  const db = getDb();
+
+  // fallback safety
+  if (!Number.isFinite(windowHours) || windowHours <= 0) {
+    return db.prepare(`
+      SELECT *
+      FROM digest_items
+      WHERE intent IS NOT NULL
+      ORDER BY received_at DESC
+    `).all() as DigestItem[];
+  }
+
+  const cutoff = new Date(
+    Date.now() - windowHours * 60 * 60 * 1000
+  ).toISOString();
+
+  return db.prepare(`
+    SELECT *
+    FROM digest_items
+    WHERE intent IS NOT NULL
+      AND received_at >= ?
+    ORDER BY received_at DESC
+  `).all(cutoff) as DigestItem[];
 }
 
 // Update item with classification
@@ -154,14 +203,15 @@ export function markItemsSent(ids: number[], digestId: number): void {
 export function createDigest(digest: Omit<Digest, 'id'>): number {
   const db = getDb();
   const result = db.prepare(`
-    INSERT INTO digests (sent_at, item_count, urgent_count, recipient, gmail_message_id, status)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO digests (sent_at, item_count, urgent_count, recipient, gmail_message_id, visible_items_hash, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(
     digest.sent_at,
     digest.item_count,
     digest.urgent_count,
     digest.recipient,
     digest.gmail_message_id ?? null,
+    digest.visible_items_hash ?? null,
     digest.status ?? 'sent'
   );
 

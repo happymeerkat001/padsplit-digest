@@ -57,6 +57,14 @@ function runMigrations(): void { // effect - environment mutation, mutates exter
   if (!hasSenderEmailColumn) { // control - routing flow, checks if migration is needed based on current schema state
     db!.exec('ALTER TABLE digest_items ADD COLUMN sender_email TEXT'); // effect - environment mutation, applies schema migration to add new column for sender email in digest_items table
   }
+
+  const hasVisibleItemsHashColumn = db!
+    .prepare("SELECT 1 FROM pragma_table_info('digests') WHERE name = 'visible_items_hash'")
+    .get();
+
+  if (!hasVisibleItemsHashColumn) {
+    db!.exec('ALTER TABLE digests ADD COLUMN visible_items_hash TEXT');
+  }
 }
 
 export function closeDb(): void { // effect- environment mutation

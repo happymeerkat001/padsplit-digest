@@ -13,6 +13,7 @@
     "start": "node --import tsx src/index.ts",
     "dev": "node --watch --import tsx src/index.ts",
     "digest:once": "node --import tsx src/index.ts --once",
+    "digest:local": "node --import tsx src/index.ts --once --no-deploy",
     "digest:schedule": "node --import tsx src/index.ts",
     "setup:oauth": "node --import tsx scripts/setup-oauth.ts",
     "setup:padsplit": "node --import tsx scripts/setup-padsplit.ts",

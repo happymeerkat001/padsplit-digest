@@ -1,6 +1,7 @@
 import type { gmail_v1 } from 'googleapis';
 import { getGmailClient } from './auth.js';
 import { config } from '../config.js';
+import { getLastReceivedTimestamp } from '../db/items.js';
 import { logger } from '../utils/logger.js';
 import { withRetry } from '../utils/retry.js';
 
@@ -25,9 +26,17 @@ function getTrackedSenders(): string[] {
 }
 
 export function buildPadSplitSenderQuery(): string {
+  const senderClause = getTrackedSenders().join(' OR ');
+  const lastReceived = getLastReceivedTimestamp();
+
+  if (lastReceived) {
+    const epochSeconds = Math.floor(new Date(lastReceived).getTime() / 1000);
+    return `from:(${senderClause}) after:${epochSeconds}`;
+  }
+
+  // First run (empty DB) — use lookback window to bootstrap
   const lookbackDays = Number.parseInt(config.gmail.senderLookbackDays, 10);
   const safeLookbackDays = Number.isFinite(lookbackDays) && lookbackDays > 0 ? lookbackDays : 1;
-  const senderClause = getTrackedSenders().join(' OR ');
   return `from:(${senderClause}) newer_than:${safeLookbackDays}d`;
 }
 

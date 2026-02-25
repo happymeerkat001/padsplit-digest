@@ -6,8 +6,47 @@ import { classifyPendingItems } from './classifier/index.js';
 import { buildAndSendDigest } from './digest/builder.js';
 import { fetchPadSplitEmails, isLinkOnlyEmail } from './gmail/fetch.js';
 import { cleanup as cleanupScraper, resolveLinks } from './scraper/resolver.js';
-import { hasHoneywellCredentials, scrapeHoneywellThermostats } from './scraper/honeywell.js';
+import {
+  closeHoneywellBrowserContext,
+  hasHoneywellCredentials,
+  scrapeHoneywellThermostats,
+} from './scraper/honeywell.js';
+import { firebaseDeploy, generateHistoryPage, publishToPublic } from './deploy/publish.js';
 import { logger } from './utils/logger.js';
+
+let lastDeployedAt = 0;
+let isPipelineRunning = false;
+const SCRAPER_TIMEOUT_MS = 120_000;
+
+async function withTimeout<T>(task: Promise<T>, step: string): Promise<T> {
+  const timeoutToken = Symbol('timeout');
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    const result = await Promise.race([
+      task,
+      new Promise<typeof timeoutToken>((resolve) => {
+        timeoutHandle = setTimeout(() => resolve(timeoutToken), SCRAPER_TIMEOUT_MS);
+      }),
+    ]);
+
+    if (result === timeoutToken) {
+      const timeoutError = new Error(`${step} timed out after ${SCRAPER_TIMEOUT_MS}ms`);
+      timeoutError.name = 'TimeoutError';
+      throw timeoutError;
+    }
+
+    return result;
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+}
+
+function isTimeoutError(err: unknown): boolean {
+  return err instanceof Error && err.name === 'TimeoutError';
+}
 
 async function runPipeline(): Promise<void> {
   const startedAt = Date.now();
@@ -47,11 +86,22 @@ async function runPipeline(): Promise<void> {
     logger.info('Step 2: Resolving link-only emails via PadSplit Playwright session');
     let resolved = 0;
     try {
-      resolved = await resolveLinks();
+      resolved = await withTimeout(resolveLinks(), 'resolveLinks()');
     } catch (err) {
-      logger.error('Link resolution failed; continuing without resolved content', {
-        error: String(err),
-      });
+      if (isTimeoutError(err)) {
+        logger.warn(`resolveLinks() timed out after ${SCRAPER_TIMEOUT_MS}ms; continuing pipeline`);
+        try {
+          await cleanupScraper();
+        } catch (cleanupErr) {
+          logger.warn('Failed to close PadSplit browser context after timeout', {
+            error: String(cleanupErr),
+          });
+        }
+      } else {
+        logger.error('Link resolution failed; continuing without resolved content', {
+          error: String(err),
+        });
+      }
     }
 
     logger.info('Step 3: Classifying pending messages');
@@ -59,13 +109,64 @@ async function runPipeline(): Promise<void> {
 
     logger.info('Step 4: Scraping Honeywell thermostat data');
     const honeywellConfigured = hasHoneywellCredentials();
-    const thermostats = honeywellConfigured ? await scrapeHoneywellThermostats() : [];
-    if (!honeywellConfigured) {
+    let thermostats: Awaited<ReturnType<typeof scrapeHoneywellThermostats>> = [];
+    if (honeywellConfigured) {
+      try {
+        thermostats = await withTimeout(
+          scrapeHoneywellThermostats(),
+          'Honeywell scraping'
+        );
+      } catch (err) {
+        if (isTimeoutError(err)) {
+          logger.warn(`Honeywell scraping timed out after ${SCRAPER_TIMEOUT_MS}ms; continuing pipeline`);
+          try {
+            await closeHoneywellBrowserContext();
+          } catch (cleanupErr) {
+            logger.warn('Failed to close Honeywell browser context after timeout', {
+              error: String(cleanupErr),
+            });
+          }
+        } else {
+          logger.error('Honeywell scrape failed; continuing without thermostat data', {
+            error: String(err),
+          });
+        }
+      }
+    } else {
       logger.warn('Honeywell credentials not configured. Thermostat section will be empty.');
     }
 
     logger.info('Step 5: Building digest report');
     const digest = await buildAndSendDigest(thermostats);
+
+    logger.info('Step 6: Publishing to Firebase Hosting');
+    const published = publishToPublic(digest.reportPath);
+    const historyPath = generateHistoryPage();
+
+    const deploySkipped = process.argv.includes('--no-deploy');
+    let deployed = false;
+    let deployIntervalMinutes = config.digest.deployIntervalMinutes;
+
+    if (!Number.isFinite(deployIntervalMinutes) || deployIntervalMinutes <= 0) {
+      deployIntervalMinutes = 30;
+    }
+
+    if (deploySkipped) {
+      logger.info('Firebase deploy skipped (--no-deploy flag present)');
+    } else {
+      const msSinceDeploy = Date.now() - lastDeployedAt;
+      const deployIntervalMs = deployIntervalMinutes * 60_000;
+
+      if (msSinceDeploy >= deployIntervalMs) {
+        deployed = firebaseDeploy();
+        if (deployed) {
+          lastDeployedAt = Date.now();
+        }
+      } else {
+        const nextIn = Math.ceil((deployIntervalMs - msSinceDeploy) / 60_000);
+        logger.info(`Firebase deploy throttled - next deploy in ~${nextIn} min`);
+      }
+    }
 
     logger.info('Pipeline complete', {
       durationMs: Date.now() - startedAt,
@@ -77,6 +178,12 @@ async function runPipeline(): Promise<void> {
       digestSent: digest.sent,
       digestItemCount: digest.itemCount,
       reportPath: digest.reportPath,
+      publicLatestPath: published.latestPath,
+      publicArchivePath: published.archivePath,
+      historyPath,
+      deployed,
+      deployIntervalMinutes,
+      deploySkipped,
     });
   } catch (err) {
     logger.error('Pipeline failed', { error: String(err) });
@@ -100,10 +207,19 @@ function startScheduler(): void {
     cron.schedule(
       cronExpression,
       async () => {
+        if (isPipelineRunning) {
+          logger.info('Skipping cycle - previous run still active');
+          return;
+        }
+
+        isPipelineRunning = true;
+
         try {
           await runPipeline();
         } catch (err) {
           logger.error('Scheduled run failed', { error: String(err), cronExpression });
+        } finally {
+          isPipelineRunning = false;
         }
       },
       { timezone }

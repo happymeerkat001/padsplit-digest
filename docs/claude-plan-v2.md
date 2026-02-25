@@ -23,7 +23,7 @@ Here's claude's plan, how do I get it saved into a file so that codex to execute
  A2. src/gmail/fetch.ts
 
  - Replace label-based fetch with Gmail q search:
- from:(support@padsplit.com OR maintenance@padsplit.com OR maint@padsplit.com OR no-reply@padsplit.com OR info@padsplit.com OR messenger@padsplit.com) newer_than:1d
+ from:(support@padsplit.com OR maintenance@padsplit.com OR maint@padsplit.com OR no-reply@padsplit.com OR info@padsplit.com OR messenger@padsplit.com) after:<last_processed_timestamp>
  - Use gmail.users.messages.list with q parameter
  - Keep getMessage parser (already extracts from, subject, body)
  - Derive source from from header by matching against sender categories

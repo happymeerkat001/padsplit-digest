@@ -75,8 +75,12 @@ export const config = {
     sessionPath: optional('HONEYWELL_SESSION_PATH', './data/honeywell-session.json'),
   },
   schedule: {
-    digestTimes: ['0 12 * * *'],
+    digestTimes: ['*/10 * * * *'],
     timezone: 'America/Chicago',
+  },
+  digest: {
+    visibilityWindowHours: Number.parseInt(optional('DIGEST_VISIBILITY_WINDOW_HOURS', '48'), 10),
+    deployIntervalMinutes: Number.parseInt(optional('DEPLOY_INTERVAL_MINUTES', '30'), 10),
   },
   db: {
     path: dbPath,

@@ -49,3 +49,6 @@ data/
 
 # Firebase
 .firebase/
+public/index.html
+public/archives/
+public/history.html

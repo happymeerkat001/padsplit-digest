@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS digests (
     urgent_count INTEGER,
     recipient TEXT,
     gmail_message_id TEXT,
+    visible_items_hash TEXT,
     status TEXT DEFAULT 'sent'
 );
 

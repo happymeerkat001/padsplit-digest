@@ -45,7 +45,7 @@ export async function isLoggedIn(): Promise<boolean> {
   const page = await ctx.newPage();
 
   try {
-    await page.goto('https://app.padsplit.com/dashboard', {
+    await page.goto('https://www.padsplit.com/host/dashboard', {
       waitUntil: 'networkidle',
       timeout: 15000,
     });

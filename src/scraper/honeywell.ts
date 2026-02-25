@@ -1,4 +1,4 @@
-import { chromium, type Browser, type Page } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { config } from '../config.js';
@@ -6,6 +6,8 @@ import { logger } from '../utils/logger.js';
 import { withRetry } from '../utils/retry.js';
 
 const PORTAL_URL = 'https://mytotalconnectcomfort.com/portal';
+let activeBrowser: Browser | null = null;
+let activeContext: BrowserContext | null = null;
 
 export interface ThermostatReading {
   name: string;
@@ -28,6 +30,28 @@ const LOGIN_SELECTORS = {
 
 export function hasHoneywellCredentials(): boolean {
   return Boolean(config.honeywell.username && config.honeywell.password);
+}
+
+export async function closeHoneywellBrowserContext(): Promise<void> {
+  if (activeContext) {
+    try {
+      await activeContext.close();
+    } catch {
+      // Ignore cleanup errors; timeout path should continue.
+    } finally {
+      activeContext = null;
+    }
+  }
+
+  if (activeBrowser) {
+    try {
+      await activeBrowser.close();
+    } catch {
+      // Ignore cleanup errors; timeout path should continue.
+    } finally {
+      activeBrowser = null;
+    }
+  }
 }
 
 async function findVisibleSelector(page: Page, selectors: string[]): Promise<string | null> {
@@ -182,9 +206,11 @@ export async function scrapeHoneywellThermostats(): Promise<ThermostatReading[]>
 
   try {
     browser = await chromium.launch({ headless: true });
+    activeBrowser = browser;
     const context = await browser.newContext(
       existsSync(sessionPath) ? { storageState: sessionPath } : undefined
     );
+    activeContext = context;
 
     const page = await context.newPage();
 
@@ -200,6 +226,7 @@ export async function scrapeHoneywellThermostats(): Promise<ThermostatReading[]>
 
     await context.storageState({ path: sessionPath });
     await context.close();
+    activeContext = null;
 
     logger.info('Honeywell thermostat scrape complete', { count: readings.length });
     return readings;
@@ -207,8 +234,24 @@ export async function scrapeHoneywellThermostats(): Promise<ThermostatReading[]>
     logger.error('Honeywell scrape failed', { error: String(err) });
     return [];
   } finally {
+    if (activeContext) {
+      try {
+        await activeContext.close();
+      } catch {
+        // Ignore cleanup errors.
+      } finally {
+        activeContext = null;
+      }
+    }
+
     if (browser) {
-      await browser.close();
+      try {
+        await browser.close();
+      } finally {
+        if (activeBrowser === browser) {
+          activeBrowser = null;
+        }
+      }
     }
   }
 }

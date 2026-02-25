@@ -19,11 +19,9 @@ async function main() {
 
   // Launch browser with persistent context (saves cookies/session)
   const context = await chromium.launchPersistentContext(sessionPath, {
-  headless: false,
-  channel: 'chrome', // <-- important
-  args: ['--disable-blink-features=AutomationControlled'],
-});
-    headless: false, // Show browser for manual login
+    headless: false,
+    channel: 'chrome',
+    args: ['--disable-blink-features=AutomationControlled'],
     viewport: { width: 1280, height: 720 },
   });
 
@@ -31,8 +29,8 @@ async function main() {
 
   // Navigate to PadSplit login
   await page.goto('https://www.padsplit.com/host/login', {
-  waitUntil: 'networkidle'
-});
+    waitUntil: 'networkidle',
+  });
 
   console.log('Browser opened. Please:');
   console.log('1. Click "Sign in with Google"');
