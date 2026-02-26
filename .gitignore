@@ -52,3 +52,6 @@ data/
 public/index.html
 public/archives/
 public/history.html
+
+
+*.html

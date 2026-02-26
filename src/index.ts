@@ -167,7 +167,7 @@ async function runPipeline(): Promise<void> {
     }
 
     logger.info('Step 5: Building digest report');
-    const digest = await buildAndSendDigest(thermostats, newItems);
+    const digest = await buildAndSendDigest(thermostats);
 
     let published = { latestPath: '', archivePath: '' };
     let historyPath = '';
