@@ -1,43 +1,43 @@
 -- PadSplit Digest Database Schema
 
--- digest_items: All fetched items from email/scraping
+-- digest_items: All fetched items from scraping
 CREATE TABLE IF NOT EXISTS digest_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT NOT NULL,              -- sender category key
-    sender_email TEXT,                 -- parsed sender email from From header
-    external_id TEXT UNIQUE,           -- Gmail message ID
+    sender_email TEXT,                 -- sender/member display name
+    external_id TEXT UNIQUE,           -- scraper-generated message ID
     house_id TEXT,
     tenant_id TEXT,
     tenant_name TEXT,
     subject TEXT,
     body_raw TEXT,
-    body_resolved TEXT,                -- After link resolution (if applicable)
-    link_url TEXT,                     -- Original link from email (if link-only)
+    body_resolved TEXT,
+    link_url TEXT,
     received_at TEXT NOT NULL,         -- ISO 8601 datetime
     fetched_at TEXT DEFAULT (datetime('now')),
 
     -- Classification
-    intent TEXT,                       -- maintenance, money, move_in, move_out, gratitude, informational, unknown
+    intent TEXT,
     confidence REAL,
     is_high_risk INTEGER DEFAULT 0,
-    urgency TEXT,                      -- 'high', 'medium', 'low'
+    urgency TEXT,
     classification_reason TEXT,
     classified_at TEXT,
 
     -- Digest tracking
-    digest_id INTEGER,                 -- FK to digests table
+    digest_id INTEGER,
     digest_sent_at TEXT,
-    status TEXT DEFAULT 'pending'      -- pending, classified, sent, error
+    status TEXT DEFAULT 'pending',
+    resolved_flag INTEGER DEFAULT 0
 );
 
--- digests: Sent digest emails
+-- digests: Generated digest runs
 CREATE TABLE IF NOT EXISTS digests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     sent_at TEXT NOT NULL,
     item_count INTEGER,
     urgent_count INTEGER,
     recipient TEXT,
-    gmail_message_id TEXT,
     visible_items_hash TEXT,
     status TEXT DEFAULT 'sent'
 );

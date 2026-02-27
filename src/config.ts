@@ -6,12 +6,6 @@ function optional(name: string, defaultValue: string): string {
   return process.env[name] ?? defaultValue;
 }
 
-function optionalBoolean(name: string, defaultValue: boolean): boolean {
-  const value = process.env[name];
-  if (value === undefined) return defaultValue;
-  return value.toLowerCase() === 'true';
-}
-
 export interface SenderCategory {
   key: string;
   label: string;
@@ -21,23 +15,23 @@ export interface SenderCategory {
 export const SENDER_CATEGORIES: SenderCategory[] = [
   {
     key: 'support',
-    label: 'Support / Move-In / Move-Out / Rating',
-    senders: ['support@padsplit.com'],
+    label: 'Support',
+    senders: ['padsplit support', 'support'],
   },
   {
     key: 'maintenance',
     label: 'Maintenance',
-    senders: ['maintenance@padsplit.com', 'maint@padsplit.com'],
+    senders: ['maintenance'],
   },
   {
-    key: 'no_reply_info',
-    label: 'No Reply / Info',
-    senders: ['no-reply@padsplit.com', 'info@padsplit.com'],
+    key: 'tasks',
+    label: 'Tasks',
+    senders: ['task'],
   },
   {
     key: 'member_messages',
     label: 'Member Messages',
-    senders: ['messenger@padsplit.com'],
+    senders: [],
   },
   {
     key: 'others',
@@ -46,7 +40,26 @@ export const SENDER_CATEGORIES: SenderCategory[] = [
   },
 ];
 
-// Ensure data directory exists
+export function resolveSenderCategory(senderName: string): string {
+  const normalized = senderName.toLowerCase().trim();
+
+  for (const category of SENDER_CATEGORIES) {
+    if (category.key === 'member_messages' || category.key === 'others') {
+      continue;
+    }
+
+    if (category.senders.some((pattern) => normalized.includes(pattern))) {
+      return category.key;
+    }
+  }
+
+  if (normalized.length > 0) {
+    return 'member_messages';
+  }
+
+  return 'others';
+}
+
 const dbPath = optional('DB_PATH', './data/padsplit-digest.sqlite');
 const dbDir = dirname(dbPath);
 if (!existsSync(dbDir)) {
@@ -54,20 +67,15 @@ if (!existsSync(dbDir)) {
 }
 
 export const config = {
-  gmail: {
-    clientId: optional('GMAIL_CLIENT_ID', ''),
-    clientSecret: optional('GMAIL_CLIENT_SECRET', ''),
-    refreshToken: optional('GMAIL_REFRESH_TOKEN', ''),
-    digestRecipient: optional('DIGEST_RECIPIENT', ''),
-    senderLookbackDays: optional('GMAIL_SENDER_LOOKBACK_DAYS', '1'),
-  },
   openai: {
     apiKey: optional('OPENAI_API_KEY', ''),
     model: 'gpt-4o-mini',
   },
   senderCategories: SENDER_CATEGORIES,
   padsplit: {
-    sessionPath: './data/padsplit-session',
+    sessionPath: optional('PADSPLIT_SESSION_PATH', './data/padsplit-session'),
+    communicationUrl: optional('PADSPLIT_COMMUNICATION_URL', 'https://www.padsplit.com/host/communication'),
+    tasksUrl: optional('PADSPLIT_TASKS_URL', 'https://www.padsplit.com/host/tasks'),
   },
   honeywell: {
     username: optional('HONEYWELL_USERNAME', ''),
@@ -75,8 +83,8 @@ export const config = {
     sessionPath: optional('HONEYWELL_SESSION_PATH', './data/honeywell-session.json'),
   },
   schedule: {
-    digestTimes: ['*/10 * * * *'],
-    timezone: 'America/Chicago',
+    digestTimes: ['*/30 * * * *'],
+    timezone: optional('TZ', 'America/Chicago'),
   },
   digest: {
     visibilityWindowHours: Number.parseInt(optional('DIGEST_VISIBILITY_WINDOW_HOURS', '48'), 10),
@@ -85,20 +93,18 @@ export const config = {
   db: {
     path: dbPath,
   },
-  runtime: {
-    enableEmailSending: optionalBoolean('ENABLE_EMAIL_SENDING', false),
-  },
 };
 
-// Validate required config for production
 export function validateConfig(): string[] {
   const warnings: string[] = [];
 
-  if (!config.gmail.clientId) warnings.push('GMAIL_CLIENT_ID is not set');
-  if (!config.gmail.clientSecret) warnings.push('GMAIL_CLIENT_SECRET is not set');
-  if (!config.gmail.refreshToken) warnings.push('GMAIL_REFRESH_TOKEN is not set');
-  if (!config.gmail.digestRecipient) warnings.push('DIGEST_RECIPIENT is not set');
-  if (!config.openai.apiKey) warnings.push('OPENAI_API_KEY is not set (LLM fallback disabled)');
+  if (!existsSync(config.padsplit.sessionPath)) {
+    warnings.push(`PadSplit session not found at ${config.padsplit.sessionPath}. Run npm run setup:padsplit`);
+  }
+
+  if (!config.openai.apiKey) {
+    warnings.push('OPENAI_API_KEY is not set (LLM fallback disabled)');
+  }
 
   return warnings;
 }

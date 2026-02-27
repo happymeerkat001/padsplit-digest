@@ -1,20 +1,14 @@
 import cron from 'node-cron';
 import { readdirSync, unlinkSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { config, validateConfig } from './config.js';
+import { classifyPendingItems } from './classifier/index.js';
+import { config, resolveSenderCategory, validateConfig } from './config.js';
+import { firebaseDeploy, generateHistoryPage, publishToPublic } from './deploy/publish.js';
 import { closeDb, getDb } from './db/init.js';
 import { insertItem, itemExists } from './db/items.js';
-import { classifyPendingItems } from './classifier/index.js';
-import { buildAndSendDigest } from './digest/builder.js';
-import { fetchPadSplitEmails, isLinkOnlyEmail } from './gmail/fetch.js';
-import { disableBrowser, enableBrowser } from './scraper/browser.js';
-import { cleanup as cleanupScraper, resolveLinks } from './scraper/resolver.js';
-import {
-  closeHoneywellBrowserContext,
-  hasHoneywellCredentials,
-  scrapeHoneywellThermostats,
-} from './scraper/honeywell.js';
-import { firebaseDeploy, generateHistoryPage, publishToPublic } from './deploy/publish.js';
+import { buildDigest } from './digest/builder.js';
+import { closeBrowser } from './scraper/browser.js';
+import { scrapeCommunication, scrapeTasks } from './scraper/padsplit.js';
 import { logger } from './utils/logger.js';
 
 let lastDeployedAt = 0;
@@ -30,8 +24,8 @@ async function withTimeout<T>(task: Promise<T>, step: string): Promise<T> {
   try {
     const result = await Promise.race([
       task,
-      new Promise<typeof timeoutToken>((resolve) => {
-        timeoutHandle = setTimeout(() => resolve(timeoutToken), SCRAPER_TIMEOUT_MS);
+      new Promise<typeof timeoutToken>((resolvePromise) => {
+        timeoutHandle = setTimeout(() => resolvePromise(timeoutToken), SCRAPER_TIMEOUT_MS);
       }),
     ]);
 
@@ -47,10 +41,6 @@ async function withTimeout<T>(task: Promise<T>, step: string): Promise<T> {
       clearTimeout(timeoutHandle);
     }
   }
-}
-
-function isTimeoutError(err: unknown): boolean {
-  return err instanceof Error && err.name === 'TimeoutError';
 }
 
 function pruneOutReports(): void {
@@ -78,96 +68,61 @@ function pruneOutReports(): void {
 
 async function runPipeline(): Promise<void> {
   const startedAt = Date.now();
-  enableBrowser();
   logger.info('Pipeline started');
 
   try {
-    logger.info('Step 1: Fetching PadSplit emails from Gmail');
-    let emails: Awaited<ReturnType<typeof fetchPadSplitEmails>> = [];
+    logger.info('Step 1: Scraping PadSplit communication and tasks');
+
+    let communicationItems: Awaited<ReturnType<typeof scrapeCommunication>> = [];
+    let taskItems: Awaited<ReturnType<typeof scrapeTasks>> = [];
+
+    try {
+      communicationItems = await withTimeout(scrapeCommunication(), 'scrapeCommunication()');
+    } catch (err) {
+      logger.error('Communication scrape failed; continuing', { error: String(err) });
+    }
+
+    try {
+      taskItems = await withTimeout(scrapeTasks(), 'scrapeTasks()');
+    } catch (err) {
+      logger.error('Tasks scrape failed; continuing', { error: String(err) });
+    }
+
+    const scrapedItems = [...communicationItems, ...taskItems];
     let newItems = 0;
 
-    try {
-      emails = await fetchPadSplitEmails();
-
-      for (const email of emails) {
-        if (itemExists(email.id)) {
-          continue;
-        }
-
-        insertItem({
-          source: email.source,
-          sender_email: email.senderEmail,
-          external_id: email.id,
-          subject: email.subject,
-          body_raw: email.body,
-          link_url: isLinkOnlyEmail(email) ? email.links[0] : undefined,
-          received_at: email.receivedAt,
-        });
-
-        newItems += 1;
+    for (const item of scrapedItems) {
+      if (itemExists(item.messageId)) {
+        continue;
       }
-    } catch (err) {
-      logger.error('Gmail fetch failed; continuing with existing data', { error: String(err) });
+
+      insertItem({
+        source: resolveSenderCategory(item.senderName),
+        sender_email: item.senderName,
+        external_id: item.messageId,
+        subject: item.subject,
+        body_raw: item.body,
+        link_url: item.messageUrl,
+        received_at: item.timestamp,
+        status: 'pending',
+        resolved_flag: 1,
+      });
+
+      newItems += 1;
     }
 
-    logger.info('Email ingestion complete', { fetched: emails.length, inserted: newItems });
+    logger.info('PadSplit ingestion complete', {
+      communication: communicationItems.length,
+      tasks: taskItems.length,
+      fetched: scrapedItems.length,
+      inserted: newItems,
+    });
 
-    logger.info('Step 2: Resolving link-only emails via PadSplit Playwright session');
-    let resolved = 0;
-    try {
-      resolved = await withTimeout(resolveLinks(), 'resolveLinks()');
-    } catch (err) {
-      if (isTimeoutError(err)) {
-        logger.warn(`resolveLinks() timed out after ${SCRAPER_TIMEOUT_MS}ms; continuing pipeline`);
-        try {
-          await cleanupScraper();
-        } catch (cleanupErr) {
-          logger.warn('Failed to close PadSplit browser context after timeout', {
-            error: String(cleanupErr),
-          });
-        }
-        disableBrowser();
-      } else {
-        logger.error('Link resolution failed; continuing without resolved content', {
-          error: String(err),
-        });
-      }
-    }
-
-    logger.info('Step 3: Classifying pending messages');
+    logger.info('Step 2: Classifying pending messages');
     const classified = await classifyPendingItems();
 
-    logger.info('Step 4: Scraping Honeywell thermostat data');
-    const honeywellConfigured = hasHoneywellCredentials();
-    let thermostats: Awaited<ReturnType<typeof scrapeHoneywellThermostats>> = [];
-    if (honeywellConfigured) {
-      try {
-        thermostats = await withTimeout(
-          scrapeHoneywellThermostats(),
-          'Honeywell scraping'
-        );
-      } catch (err) {
-        if (isTimeoutError(err)) {
-          logger.warn(`Honeywell scraping timed out after ${SCRAPER_TIMEOUT_MS}ms; continuing pipeline`);
-          try {
-            await closeHoneywellBrowserContext();
-          } catch (cleanupErr) {
-            logger.warn('Failed to close Honeywell browser context after timeout', {
-              error: String(cleanupErr),
-            });
-          }
-        } else {
-          logger.error('Honeywell scrape failed; continuing without thermostat data', {
-            error: String(err),
-          });
-        }
-      }
-    } else {
-      logger.warn('Honeywell credentials not configured. Thermostat section will be empty.');
-    }
-
-    logger.info('Step 5: Building digest report');
-    const digest = await buildAndSendDigest(thermostats);
+    logger.info('Step 3: Building digest report');
+    const digest = await buildDigest(newItems);
 
     let published = { latestPath: '', archivePath: '' };
     let historyPath = '';
@@ -180,7 +135,7 @@ async function runPipeline(): Promise<void> {
     }
 
     if (digest.reportPath) {
-      logger.info('Step 6: Publishing to Firebase Hosting');
+      logger.info('Step 4: Publishing to Firebase Hosting');
       published = publishToPublic(digest.reportPath);
       historyPath = generateHistoryPage();
       pruneOutReports();
@@ -202,25 +157,22 @@ async function runPipeline(): Promise<void> {
         }
       }
     } else {
-      logger.info('Step 6: Skipped - digest unchanged');
+      logger.info('Step 4: Skipped - digest unchanged');
       logger.info('Skipped no-op digest publish/deploy', { itemCount: digest.itemCount });
     }
 
     logger.info('Pipeline complete', {
       durationMs: Date.now() - startedAt,
-      fetched: emails.length,
+      communicationScraped: communicationItems.length,
+      tasksScraped: taskItems.length,
       inserted: newItems,
-      resolved,
       classified,
-      thermostatReadings: thermostats.length,
-      digestSent: digest.sent,
       digestItemCount: digest.itemCount,
       reportPath: digest.reportPath,
       publicLatestPath: published.latestPath,
       publicArchivePath: published.archivePath,
       historyPath,
       deployed,
-      deployIntervalMinutes,
       deploySkipped,
     });
   } catch (err) {
@@ -232,7 +184,7 @@ async function runPipeline(): Promise<void> {
 async function runOnce(): Promise<void> {
   logger.info('Running one digest cycle');
   await runPipeline();
-  await cleanupScraper();
+  await closeBrowser();
   closeDb();
 }
 
@@ -293,9 +245,7 @@ async function main(): Promise<void> {
 
 async function shutdown(): Promise<void> {
   logger.info('Shutting down');
-  await cleanupScraper();
-  await closeHoneywellBrowserContext();
-  logger.info('Shutdown cleanup complete');
+  await closeBrowser();
   closeDb();
   process.exit(0);
 }

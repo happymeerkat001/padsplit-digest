@@ -23,6 +23,7 @@ export interface DigestItem {
   digest_id?: number;
   digest_sent_at?: string;
   status?: 'pending' | 'classified' | 'sent' | 'error';
+  resolved_flag?: number;
 }
 
 export interface Digest {
@@ -31,37 +32,35 @@ export interface Digest {
   item_count: number;
   urgent_count: number;
   recipient: string;
-  gmail_message_id?: string;
   visible_items_hash?: string;
   status?: string;
 }
 
-// Get the most recent received_at timestamp from all items
 export function getLastReceivedTimestamp(): string | null {
   const db = getDb();
-  const row = db.prepare('SELECT MAX(received_at) as last_received FROM digest_items').get() as { last_received: string | null } | undefined;
+  const row = db.prepare('SELECT MAX(received_at) as last_received FROM digest_items').get() as
+    | { last_received: string | null }
+    | undefined;
   return row?.last_received ?? null;
 }
 
-// Check if item exists by external_id
 export function itemExists(externalId: string): boolean {
   const db = getDb();
   const row = db.prepare('SELECT 1 FROM digest_items WHERE external_id = ?').get(externalId);
   return row !== undefined;
 }
 
-// Insert new item (idempotent - skips if exists)
 export function insertItem(item: Omit<DigestItem, 'id'>): number | null {
   if (itemExists(item.external_id)) {
-    return null; // Already exists, skip
+    return null;
   }
 
   const db = getDb();
   const stmt = db.prepare(`
     INSERT INTO digest_items (
       source, sender_email, external_id, house_id, tenant_id, tenant_name,
-      subject, body_raw, body_resolved, link_url, received_at, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      subject, body_raw, body_resolved, link_url, received_at, status, resolved_flag
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const result = stmt.run(
@@ -76,70 +75,49 @@ export function insertItem(item: Omit<DigestItem, 'id'>): number | null {
     item.body_resolved ?? null,
     item.link_url ?? null,
     item.received_at,
-    item.status ?? 'pending'
+    item.status ?? 'pending',
+    item.resolved_flag ?? 0
   );
 
   return result.lastInsertRowid as number;
 }
 
-// Get pending items (not yet classified)
 export function getPendingItems(): DigestItem[] {
   const db = getDb();
-  return db.prepare(`
-    SELECT * FROM digest_items WHERE status = 'pending' ORDER BY received_at ASC
-  `).all() as DigestItem[];
-}
-
-// Get classified items not yet sent (optionally bounded by a visibility window)
-export function getUnsentClassifiedItems(windowHours?: number): DigestItem[] {
-  const db = getDb();
-
-  if (
-    windowHours == null ||
-    !Number.isFinite(windowHours) ||
-    windowHours <= 0
-  ) {
-    return db.prepare(`
-      SELECT * FROM digest_items WHERE status = 'classified' ORDER BY urgency DESC, received_at ASC
-    `).all() as DigestItem[];
-  }
-
-  const cutoff = new Date(Date.now() - windowHours * 3_600_000).toISOString();
-
-  return db.prepare(`
-    SELECT * FROM digest_items
-    WHERE status = 'classified' AND received_at >= ?
-    ORDER BY urgency DESC, received_at ASC
-  `).all(cutoff) as DigestItem[];
+  return db
+    .prepare(`
+      SELECT * FROM digest_items WHERE status = 'pending' ORDER BY received_at ASC
+    `)
+    .all() as DigestItem[];
 }
 
 export function getVisibleClassifiedItems(windowHours: number): DigestItem[] {
   const db = getDb();
 
-  // fallback safety
   if (!Number.isFinite(windowHours) || windowHours <= 0) {
-    return db.prepare(`
+    return db
+      .prepare(`
+        SELECT *
+        FROM digest_items
+        WHERE intent IS NOT NULL
+        ORDER BY received_at DESC
+      `)
+      .all() as DigestItem[];
+  }
+
+  const cutoff = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
+
+  return db
+    .prepare(`
       SELECT *
       FROM digest_items
       WHERE intent IS NOT NULL
+        AND received_at >= ?
       ORDER BY received_at DESC
-    `).all() as DigestItem[];
-  }
-
-  const cutoff = new Date(
-    Date.now() - windowHours * 60 * 60 * 1000
-  ).toISOString();
-
-  return db.prepare(`
-    SELECT *
-    FROM digest_items
-    WHERE intent IS NOT NULL
-      AND received_at >= ?
-    ORDER BY received_at DESC
-  `).all(cutoff) as DigestItem[];
+    `)
+    .all(cutoff) as DigestItem[];
 }
 
-// Update item with classification
 export function updateItemClassification(
   id: number,
   classification: {
@@ -171,15 +149,20 @@ export function updateItemClassification(
   );
 }
 
-// Update item with resolved body
 export function updateItemResolved(id: number, bodyResolved: string): void {
   const db = getDb();
   db.prepare(`
-    UPDATE digest_items SET body_resolved = ? WHERE id = ?
+    UPDATE digest_items
+    SET body_resolved = ?, resolved_flag = 1
+    WHERE id = ?
   `).run(bodyResolved, id);
 }
 
-// Mark items as sent
+export function markResolved(id: number): void {
+  const db = getDb();
+  db.prepare('UPDATE digest_items SET resolved_flag = 1 WHERE id = ?').run(id);
+}
+
 export function markItemsSent(ids: number[], digestId: number): void {
   const db = getDb();
   const stmt = db.prepare(`
@@ -199,21 +182,21 @@ export function markItemsSent(ids: number[], digestId: number): void {
   transaction();
 }
 
-// Create digest record
 export function createDigest(digest: Omit<Digest, 'id'>): number {
   const db = getDb();
-  const result = db.prepare(`
-    INSERT INTO digests (sent_at, item_count, urgent_count, recipient, gmail_message_id, visible_items_hash, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    digest.sent_at,
-    digest.item_count,
-    digest.urgent_count,
-    digest.recipient,
-    digest.gmail_message_id ?? null,
-    digest.visible_items_hash ?? null,
-    digest.status ?? 'sent'
-  );
+  const result = db
+    .prepare(`
+      INSERT INTO digests (sent_at, item_count, urgent_count, recipient, visible_items_hash, status)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `)
+    .run(
+      digest.sent_at,
+      digest.item_count,
+      digest.urgent_count,
+      digest.recipient,
+      digest.visible_items_hash ?? null,
+      digest.status ?? 'sent'
+    );
 
   return result.lastInsertRowid as number;
 }

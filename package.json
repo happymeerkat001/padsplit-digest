@@ -15,7 +15,6 @@
     "digest:once": "node --import tsx src/index.ts --once",
     "digest:local": "node --import tsx src/index.ts --once --no-deploy",
     "digest:schedule": "node --import tsx src/index.ts",
-    "setup:oauth": "node --import tsx scripts/setup-oauth.ts",
     "setup:padsplit": "node --import tsx scripts/setup-padsplit.ts",
     "setup:honeywell": "node --import tsx scripts/setup-honeywell.ts",
     "migrate": "node --import tsx scripts/migrate-conversations.ts",
@@ -24,7 +23,6 @@
   "dependencies": {
     "better-sqlite3": "^11.0.0",
     "dotenv": "^16.4.0",
-    "googleapis": "^144.0.0",
     "node-cron": "^3.0.3",
     "openai": "^4.77.0",
     "playwright": "^1.48.0"
