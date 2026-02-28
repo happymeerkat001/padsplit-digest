@@ -108,6 +108,44 @@ function truncateText(value: string, limit: number): string {
   return `${value.slice(0, limit - 1)}...`;
 }
 
+function parseTaskDetails(item: DigestItem): {
+  taskType: string;
+  room: string;
+  description: string;
+  status: string;
+} {
+  const lines = (item.body_raw || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  let status = '';
+  const content = lines.filter((line) => {
+    if (line.toLowerCase().startsWith('status:')) {
+      status = line.replace(/^status:\s*/i, '').trim();
+      return false;
+    }
+    return true;
+  });
+
+  return {
+    taskType: content[0] || '(No type)',
+    room: content[1] || '',
+    description: content.slice(2).join(' ') || '(No description)',
+    status: status || 'Other',
+  };
+}
+
+function filterTaskItemsByStatus(items: DigestItem[]): DigestItem[] {
+  const { taskStatuses } = config.digest;
+  if (taskStatuses.length === 0) {
+    return items;
+  }
+
+  const allowedStatuses = new Set(taskStatuses);
+  return items.filter((item) => allowedStatuses.has(parseTaskDetails(item).status));
+}
+
 function renderItems(group: SenderGroup): string {
   if (group.key === 'member_messages') {
     const rows = group.items.map((item) => {
@@ -154,22 +192,7 @@ function renderItems(group: SenderGroup): string {
     }>>();
 
     for (const item of group.items) {
-      const lines = (item.body_raw || '')
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean);
-      let status = '';
-      const content = lines.filter((line) => {
-        if (line.toLowerCase().startsWith('status:')) {
-          status = line.replace(/^status:\s*/i, '').trim();
-          return false;
-        }
-        return true;
-      });
-
-      const taskType = content[0] || '(No type)';
-      const room = content[1] || '';
-      const description = content.slice(2).join(' ') || '(No description)';
+      const { taskType, room, description, status } = parseTaskDetails(item);
       const statusKey = status || 'Other';
       const bucket = byStatus.get(statusKey) ?? [];
       bucket.push({
@@ -180,6 +203,16 @@ function renderItems(group: SenderGroup): string {
         status: statusKey,
       });
       byStatus.set(statusKey, bucket);
+    }
+
+    const { taskStatuses } = config.digest;
+    if (taskStatuses.length > 0) {
+      const allowedStatuses = new Set(taskStatuses);
+      for (const key of Array.from(byStatus.keys())) {
+        if (!allowedStatuses.has(key)) {
+          byStatus.delete(key);
+        }
+      }
     }
 
     const knownStatuses = new Set<string>(TASK_COLUMNS.map((column) => column.status));
@@ -275,8 +308,23 @@ ${sections.join('\n')}
 }
 
 function buildDigestHtml(groups: SenderGroup[], now: Date): string {
-  const totalItems = groups.reduce((sum, group) => sum + group.items.length, 0);
-  const urgentCount = groups.reduce(
+  const { groups: allowedGroups } = config.digest;
+  const visibleGroups = groups
+    .map((group): SenderGroup => {
+      if (group.key !== 'tasks') {
+        return group;
+      }
+
+      return {
+        ...group,
+        items: filterTaskItemsByStatus(group.items),
+      };
+    })
+    .filter((group) => group.items.length > 0)
+    .filter((group) => allowedGroups.length === 0 || allowedGroups.includes(group.key));
+
+  const totalItems = visibleGroups.reduce((sum, group) => sum + group.items.length, 0);
+  const urgentCount = visibleGroups.reduce(
     (sum, group) => sum + group.items.filter((item) => item.urgency === 'high').length,
     0
   );
@@ -292,9 +340,7 @@ function buildDigestHtml(groups: SenderGroup[], now: Date): string {
   });
   const deployedAt = readDeployMetaLocalized();
 
-  const sections = groups
-    .filter((group) => group.items.length > 0)
-    .map((group) => `
+  const sections = visibleGroups.map((group) => `
     <section>
       <h2>${escapeHtml(group.label)} (${group.items.length})</h2>
       ${renderItems(group)}

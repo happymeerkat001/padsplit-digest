@@ -1,47 +1,20 @@
 import cron from 'node-cron';
 import { readdirSync, unlinkSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { fetchMessages } from './api/messages.js';
+import { fetchTickets, ticketsToInboxMessages } from './api/tickets.js';
 import { classifyPendingItems } from './classifier/index.js';
 import { config, resolveSenderCategory, validateConfig } from './config.js';
 import { firebaseDeploy, generateHistoryPage, publishToPublic } from './deploy/publish.js';
 import { closeDb, getDb } from './db/init.js';
 import { insertItem, itemExists } from './db/items.js';
 import { buildDigest } from './digest/builder.js';
-import { closeBrowser } from './scraper/browser.js';
-import { scrapeCommunication, scrapeTasks } from './scraper/padsplit.js';
 import { logger } from './utils/logger.js';
 
 let lastDeployedAt = 0;
 let isPipelineRunning = false;
-const SCRAPER_TIMEOUT_MS = 120_000;
 const OUT_DIR = resolve(process.cwd(), 'out');
 const MAX_OUT_REPORT_FILES = 500;
-
-async function withTimeout<T>(task: Promise<T>, step: string): Promise<T> {
-  const timeoutToken = Symbol('timeout');
-  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-
-  try {
-    const result = await Promise.race([
-      task,
-      new Promise<typeof timeoutToken>((resolvePromise) => {
-        timeoutHandle = setTimeout(() => resolvePromise(timeoutToken), SCRAPER_TIMEOUT_MS);
-      }),
-    ]);
-
-    if (result === timeoutToken) {
-      const timeoutError = new Error(`${step} timed out after ${SCRAPER_TIMEOUT_MS}ms`);
-      timeoutError.name = 'TimeoutError';
-      throw timeoutError;
-    }
-
-    return result;
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
-  }
-}
 
 function pruneOutReports(): void {
   try {
@@ -71,10 +44,11 @@ async function runPipeline(): Promise<void> {
   logger.info('Pipeline started');
 
   try {
-    logger.info('Step 1: Scraping PadSplit communication and tasks');
+    logger.info('Step 1: Fetching PadSplit data via API');
 
-    const communicationItems = await withTimeout(scrapeCommunication(), 'scrapeCommunication()');
-    const taskItems = await withTimeout(scrapeTasks(), 'scrapeTasks()');
+    const tickets = await fetchTickets();
+    const taskItems = ticketsToInboxMessages(tickets);
+    const communicationItems = await fetchMessages();
 
     const scrapedItems = [...communicationItems, ...taskItems];
     let newItems = 0;
@@ -102,6 +76,7 @@ async function runPipeline(): Promise<void> {
 
     logger.info('PadSplit ingestion complete', {
       communication: communicationItems.length,
+      tickets: tickets.length,
       tasks: taskItems.length,
       fetched: scrapedItems.length,
       inserted: newItems,
@@ -173,7 +148,6 @@ async function runPipeline(): Promise<void> {
 async function runOnce(): Promise<void> {
   logger.info('Running one digest cycle');
   await runPipeline();
-  await closeBrowser();
   closeDb();
 }
 
@@ -234,7 +208,6 @@ async function main(): Promise<void> {
 
 async function shutdown(): Promise<void> {
   logger.info('Shutting down');
-  await closeBrowser();
   closeDb();
   process.exit(0);
 }

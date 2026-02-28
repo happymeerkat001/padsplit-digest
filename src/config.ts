@@ -73,7 +73,7 @@ export const config = {
   },
   senderCategories: SENDER_CATEGORIES,
   padsplit: {
-    sessionPath: optional('PADSPLIT_SESSION_PATH', './data/padsplit-session'),
+    cookie: optional('PADSPLIT_COOKIE', ''),
     communicationUrl: optional('PADSPLIT_COMMUNICATION_URL', 'https://www.padsplit.com/host/communication'),
     tasksUrl: optional('PADSPLIT_TASKS_URL', 'https://www.padsplit.com/host/tasks'),
   },
@@ -89,6 +89,14 @@ export const config = {
   digest: {
     visibilityWindowHours: Number.parseInt(optional('DIGEST_VISIBILITY_WINDOW_HOURS', '48'), 10),
     deployIntervalMinutes: Number.parseInt(optional('DEPLOY_INTERVAL_MINUTES', '30'), 10),
+    taskStatuses: optional('DIGEST_TASK_STATUSES', '')
+      .split(',')
+      .map((status) => status.trim())
+      .filter(Boolean),
+    groups: optional('DIGEST_GROUPS', '')
+      .split(',')
+      .map((groupKey) => groupKey.trim())
+      .filter(Boolean),
   },
   db: {
     path: dbPath,
@@ -98,8 +106,8 @@ export const config = {
 export function validateConfig(): string[] {
   const warnings: string[] = [];
 
-  if (!existsSync(config.padsplit.sessionPath)) {
-    warnings.push(`PadSplit session not found at ${config.padsplit.sessionPath}. Run npm run setup:padsplit`);
+  if (!config.padsplit.cookie) {
+    warnings.push('PADSPLIT_COOKIE is not set (PadSplit API ingestion disabled)');
   }
 
   if (!config.openai.apiKey) {

@@ -15,7 +15,6 @@
     "digest:once": "node --import tsx src/index.ts --once",
     "digest:local": "node --import tsx src/index.ts --once --no-deploy",
     "digest:schedule": "node --import tsx src/index.ts",
-    "setup:padsplit": "node --import tsx scripts/setup-padsplit.ts",
     "setup:honeywell": "node --import tsx scripts/setup-honeywell.ts",
     "migrate": "node --import tsx scripts/migrate-conversations.ts",
     "test": "NODE_ENV=test node --import tsx --test src/**/*.test.ts"
