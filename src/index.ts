@@ -73,20 +73,8 @@ async function runPipeline(): Promise<void> {
   try {
     logger.info('Step 1: Scraping PadSplit communication and tasks');
 
-    let communicationItems: Awaited<ReturnType<typeof scrapeCommunication>> = [];
-    let taskItems: Awaited<ReturnType<typeof scrapeTasks>> = [];
-
-    try {
-      communicationItems = await withTimeout(scrapeCommunication(), 'scrapeCommunication()');
-    } catch (err) {
-      logger.error('Communication scrape failed; continuing', { error: String(err) });
-    }
-
-    try {
-      taskItems = await withTimeout(scrapeTasks(), 'scrapeTasks()');
-    } catch (err) {
-      logger.error('Tasks scrape failed; continuing', { error: String(err) });
-    }
+    const communicationItems = await withTimeout(scrapeCommunication(), 'scrapeCommunication()');
+    const taskItems = await withTimeout(scrapeTasks(), 'scrapeTasks()');
 
     const scrapedItems = [...communicationItems, ...taskItems];
     let newItems = 0;
@@ -104,6 +92,7 @@ async function runPipeline(): Promise<void> {
         body_raw: item.body,
         link_url: item.messageUrl,
         received_at: item.timestamp,
+        tenant_name: item.source === 'communication' ? item.senderName : undefined,
         status: 'pending',
         resolved_flag: 1,
       });

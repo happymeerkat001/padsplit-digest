@@ -17,6 +17,14 @@ interface SenderGroup {
   items: DigestItem[];
 }
 
+const TASK_COLUMNS = [
+  { status: 'Requests', color: '#555555' },
+  { status: 'Open', color: '#0067c7' },
+  { status: 'In Progress', color: '#ecbc3e' },
+  { status: 'On Hold', color: '#d00000' },
+  { status: 'Complete', color: '#128050' },
+] as const;
+
 function groupBySenderCategory(items: DigestItem[]): SenderGroup[] {
   const groupMap = new Map<string, SenderGroup>();
 
@@ -93,9 +101,143 @@ function readDeployMetaLocalized(): string | null {
   }
 }
 
+function truncateText(value: string, limit: number): string {
+  if (value.length <= limit) {
+    return value;
+  }
+  return `${value.slice(0, limit - 1)}...`;
+}
+
 function renderItems(group: SenderGroup): string {
-  if (group.items.length === 0) {
-    return '<p class="empty">No items in this category.</p>';
+  if (group.key === 'member_messages') {
+    const rows = group.items.map((item) => {
+      const member = escapeHtml(item.sender_email || 'Member');
+      const property = escapeHtml(item.subject || '(No property)');
+      const message = escapeHtml(truncateText(item.body_raw || '(No message)', 60));
+      const urgency = escapeHtml(item.urgency || 'medium');
+      const receivedAt = new Date(item.received_at).toLocaleString('en-US', {
+        timeZone: config.schedule.timezone,
+      });
+
+      return `<tr>
+      <td>${member}</td>
+      <td class="subject">${property}</td>
+      <td>${message}</td>
+      <td>${urgency}</td>
+      <td>${escapeHtml(receivedAt)}</td>
+    </tr>`;
+    });
+
+    return `<table>
+    <thead>
+      <tr>
+        <th>Member</th>
+        <th>Property</th>
+        <th>Message</th>
+        <th>Urgency</th>
+        <th>Received (${escapeHtml(config.schedule.timezone)})</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows.join('\n')}
+    </tbody>
+  </table>`;
+  }
+
+  if (group.key === 'tasks') {
+    const byStatus = new Map<string, Array<{
+      item: DigestItem;
+      taskType: string;
+      room: string;
+      description: string;
+      status: string;
+    }>>();
+
+    for (const item of group.items) {
+      const lines = (item.body_raw || '')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+      let status = '';
+      const content = lines.filter((line) => {
+        if (line.toLowerCase().startsWith('status:')) {
+          status = line.replace(/^status:\s*/i, '').trim();
+          return false;
+        }
+        return true;
+      });
+
+      const taskType = content[0] || '(No type)';
+      const room = content[1] || '';
+      const description = content.slice(2).join(' ') || '(No description)';
+      const statusKey = status || 'Other';
+      const bucket = byStatus.get(statusKey) ?? [];
+      bucket.push({
+        item,
+        taskType,
+        room,
+        description,
+        status: statusKey,
+      });
+      byStatus.set(statusKey, bucket);
+    }
+
+    const knownStatuses = new Set<string>(TASK_COLUMNS.map((column) => column.status));
+    const sections: string[] = [];
+
+    for (const column of TASK_COLUMNS) {
+      const cards = byStatus.get(column.status) ?? [];
+      if (cards.length === 0) {
+        continue;
+      }
+
+      const renderedCards = cards.map(({ item, taskType, room, description }) => {
+        const receivedAt = new Date(item.received_at).toLocaleString('en-US', {
+          timeZone: config.schedule.timezone,
+        });
+        const meta = [taskType, room].filter(Boolean).join(' | ');
+        const urgency = item.urgency || 'medium';
+
+        return `<div class="task-card">
+  <div class="task-address">${escapeHtml(item.subject || '(No address)')}</div>
+  <div class="task-meta">${escapeHtml(meta || '(No type)')}</div>
+  <div class="task-desc">${escapeHtml(description)}</div>
+  <div class="task-footer">${escapeHtml(urgency)} · ${escapeHtml(receivedAt)}</div>
+</div>`;
+      });
+
+      sections.push(`<h3 style="border-left: 4px solid ${column.color}">${escapeHtml(column.status)} (${cards.length})</h3>
+${renderedCards.join('\n')}`);
+    }
+
+    const otherCards = Array.from(byStatus.entries())
+      .filter(([status]) => !knownStatuses.has(status))
+      .flatMap(([, cards]) => cards);
+
+    if (otherCards.length > 0) {
+      const renderedOther = otherCards.map(({ item, taskType, room, description, status }) => {
+        const receivedAt = new Date(item.received_at).toLocaleString('en-US', {
+          timeZone: config.schedule.timezone,
+        });
+        const meta = [taskType, room].filter(Boolean).join(' | ');
+        const urgency = item.urgency || 'medium';
+        const descriptionWithStatus = status ? `${description} (${status})` : description;
+
+        return `<div class="task-card">
+  <div class="task-address">${escapeHtml(item.subject || '(No address)')}</div>
+  <div class="task-meta">${escapeHtml(meta || '(No type)')}</div>
+  <div class="task-desc">${escapeHtml(descriptionWithStatus)}</div>
+  <div class="task-footer">${escapeHtml(urgency)} · ${escapeHtml(receivedAt)}</div>
+</div>`;
+      });
+
+      sections.push(`<h3 style="border-left: 4px solid #6b7280">Other (${otherCards.length})</h3>
+${renderedOther.join('\n')}`);
+    }
+
+    return `<div class="task-board">
+${sections.join('\n')}
+</div>`;
   }
 
   const rows = group.items.map((item) => {
@@ -150,7 +292,9 @@ function buildDigestHtml(groups: SenderGroup[], now: Date): string {
   });
   const deployedAt = readDeployMetaLocalized();
 
-  const sections = groups.map((group) => `
+  const sections = groups
+    .filter((group) => group.items.length > 0)
+    .map((group) => `
     <section>
       <h2>${escapeHtml(group.label)} (${group.items.length})</h2>
       ${renderItems(group)}
@@ -212,6 +356,35 @@ function buildDigestHtml(groups: SenderGroup[], now: Date): string {
       font-size: 1.05rem;
       color: var(--accent);
     }
+    .task-board h3 {
+      padding: 4px 0 4px 10px;
+      margin: 14px 0 8px;
+      font-size: 0.95rem;
+    }
+    .task-card {
+      background: #fbfcfd;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+    }
+    .task-address {
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .task-meta {
+      color: var(--muted);
+      font-size: 0.88rem;
+      margin-bottom: 4px;
+    }
+    .task-desc {
+      font-size: 0.9rem;
+      margin-bottom: 6px;
+    }
+    .task-footer {
+      font-size: 0.83rem;
+      color: var(--muted);
+    }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -238,10 +411,6 @@ function buildDigestHtml(groups: SenderGroup[], now: Date): string {
     }
     li {
       margin: 6px 0;
-    }
-    .empty {
-      color: var(--muted);
-      margin: 0;
     }
   </style>
 </head>
