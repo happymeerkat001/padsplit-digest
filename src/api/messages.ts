@@ -6,31 +6,31 @@ import { logger } from '../utils/logger.js';
 
 const GRAPHQL_ENDPOINT = '/api/graphql/';
 const OPERATION_NAME = 'HostCommunicationConversations';
-const CONVERSATIONS_QUERY = `
-query HostCommunicationConversations($first: Int) {
-  hostConversations(first: $first) {
-    edges {
-      node {
-        id
-        subject
-        url
-        updatedAt
-        property {
-          address
-        }
-        latestMessage {
-          body
-          createdAt
-          sender {
-            fullName
-            name
-          }
-        }
-      }
-    }
-  }
-}
-`;
+// const CONVERSATIONS_QUERY = `
+// query HostCommunicationConversations($first: Int) {
+//   hostConversations(first: $first) {
+//     edges {
+//       node {
+//         id
+//         subject
+//         url
+//         updatedAt
+//         property {
+//           address
+//         }
+//         latestMessage {
+//           body
+//           createdAt
+//           sender {
+//             fullName
+//             name
+//           }
+//         }
+//       }
+//     }
+//   }
+// }
+// `;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -84,55 +84,7 @@ function resolveConversationNodes(data: unknown): Record<string, unknown>[] {
 }
 
 export async function fetchMessages(): Promise<InboxMessage[]> {
-  const startedAt = Date.now();
-  const data = await graphqlRequest<unknown>({
-    operationName: OPERATION_NAME,
-    query: CONVERSATIONS_QUERY,
-    variables: { first: 100 },
-  });
-
-  let nodes: Record<string, unknown>[];
-  try {
-    nodes = resolveConversationNodes(data);
-  } catch (err) {
-    logger.error('PadSplit messages schema mismatch', {
-      endpoint: GRAPHQL_ENDPOINT,
-      operationName: OPERATION_NAME,
-      responseShape: summarizeShape(data),
-      error: String(err),
-    });
-    throw err;
-  }
-
-  const messages = nodes.map((node) => {
-    const latestMessage = asRecord(node['latestMessage']);
-    const sender = asRecord(latestMessage?.['sender']);
-    const property = asRecord(node['property']);
-
-    const id = asString(node['id']) || createHash('sha256').update(summarizeShape(node)).digest('hex');
-    const senderName = asString(sender?.['fullName']) || asString(sender?.['name']) || 'Member';
-    const subject = asString(node['subject']) || asString(property?.['address']) || 'Conversation';
-    const body = asString(latestMessage?.['body']) || '(No message body)';
-    const messageUrl = asString(node['url']) || `${config.padsplit.communicationUrl}/${id}`;
-    const timestamp = coerceIsoDate(asString(latestMessage?.['createdAt']) || asString(node['updatedAt']));
-
-    return {
-      messageId: `padsplit-${id}`,
-      source: 'communication' as const,
-      senderName,
-      subject,
-      body,
-      messageUrl,
-      timestamp,
-    };
-  });
-
-  logger.info('PadSplit messages fetched', {
-    endpoint: GRAPHQL_ENDPOINT,
-    operationName: OPERATION_NAME,
-    durationMs: Date.now() - startedAt,
-    count: messages.length,
-  });
-
-  return messages;
+  logger.info("Conversations temporarily disabled (schema change)");
+  return [];
 }
+

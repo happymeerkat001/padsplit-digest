@@ -75,6 +75,14 @@ function pickTicketArray(payload: unknown): unknown[] {
 }
 
 function normalizeTicket(raw: unknown): Ticket {
+  const obj = raw as Record<string, unknown>;
+
+const idValue = obj["id"];
+if (idValue === undefined || idValue === null) {
+  throw new SchemaError("Ticket missing id");
+}
+const id = String(idValue);
+
   const record = asRecord(raw);
   if (!record) {
     throw new SchemaError('Ticket entry is not an object');
@@ -82,16 +90,6 @@ function normalizeTicket(raw: unknown): Ticket {
 
   const property = asRecord(record['property']);
   const assignee = asRecord(record['assigned_to']) ?? asRecord(record['assignedTo']);
-
-  const id =
-    asString(record['id']) ||
-    asString(record['ticket_id']) ||
-    asString(record['ticketId']) ||
-    asString(record['uuid']);
-
-  if (!id) {
-    throw new SchemaError('Ticket missing id');
-  }
 
   const propertyId =
     asString(record['property_id']) || asString(record['propertyId']) || asString(property?.['id']) || 'unknown';
@@ -144,6 +142,23 @@ export async function fetchTickets(): Promise<Ticket[]> {
   const startedAt = Date.now();
   const payload = await apiGet<unknown>(TICKETS_ENDPOINT);
   const rawTickets = pickTicketArray(payload);
+
+  // --- Temporary debug inspection ---
+  const root = typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  logger.info('Tickets API response shape', {
+    topLevelKeys: Object.keys(root),
+    hasResults: Array.isArray(root['results']),
+    rawArrayLength: rawTickets.length,
+  });
+
+  if (rawTickets.length > 0) {
+    logger.info('First ticket raw', {
+      firstTicket: JSON.stringify(rawTickets[0]).slice(0, 2000),
+      firstTicketKeys: Object.keys(rawTickets[0] as Record<string, unknown>),
+    });
+  }
+  // --- End debug inspection ---
+
   const tickets = rawTickets.map((raw) => normalizeTicket(raw));
 
   logger.info('PadSplit tickets fetched', {
