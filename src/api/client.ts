@@ -3,7 +3,7 @@ import { logger } from '../utils/logger.js';
 const BASE_URL = 'https://www.padsplit.com';
 const USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-const DEFAULT_REFERER = 'https://www.padsplit.com/host/communication';
+const DEFAULT_REFERER = 'https://www.padsplit.com/';
 const REQUEST_TIMEOUT_MS = 30_000;
 
 interface GraphqlBody {
@@ -46,6 +46,14 @@ function buildHeaders(): {
   const csrfMatch = cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
   const csrfToken = csrfMatch?.[1] ?? '';
 
+  logger.info('API headers built', {
+    csrfTokenLength: csrfToken.length,
+    cookieLength: cookie.length,
+    cookiePreview: `${cookie.slice(0, 30)}...`,
+    hasSessionId: cookie.includes('sessionid='),
+    hasCsrfToken: cookie.includes('csrftoken='),
+  });
+
   return {
     headers: {
       'Content-Type': 'application/json',
@@ -83,17 +91,25 @@ export async function apiGet<T>(path: string): Promise<T> {
     signal,
   });
 
-  if (response.status === 401) {
-    throw new AuthError('Session expired');
-  }
-
-  if (response.status === 403) {
-    throw new AuthError('Cookie or CSRF token invalid');
-  }
-
   const { data, snippet } = await parseJsonOrSnippet(response);
 
   if (!response.ok) {
+    logger.error('API request failed', {
+      status: response.status,
+      statusText: response.statusText,
+      url,
+      responseHeaders: Object.fromEntries(response.headers.entries()),
+    });
+    logger.error('Response body', { snippet });
+
+    if (response.status === 401) {
+      throw new AuthError('Session expired');
+    }
+
+    if (response.status === 403) {
+      throw new AuthError('Cookie or CSRF token invalid');
+    }
+
     throw new Error(`GET ${path} failed (${response.status}): ${snippet}`);
   }
 
@@ -121,17 +137,25 @@ export async function graphqlRequest<T>(body: GraphqlBody): Promise<T> {
     body: JSON.stringify(body),
   });
 
-  if (response.status === 401) {
-    throw new AuthError('Session expired');
-  }
-
-  if (response.status === 403) {
-    throw new AuthError('Cookie or CSRF token invalid');
-  }
-
   const { data, snippet } = await parseJsonOrSnippet(response);
 
   if (!response.ok) {
+    logger.error('API request failed', {
+      status: response.status,
+      statusText: response.statusText,
+      url,
+      responseHeaders: Object.fromEntries(response.headers.entries()),
+    });
+    logger.error('Response body', { snippet });
+
+    if (response.status === 401) {
+      throw new AuthError('Session expired');
+    }
+
+    if (response.status === 403) {
+      throw new AuthError('Cookie or CSRF token invalid');
+    }
+
     throw new Error(`GraphQL ${body.operationName} failed (${response.status}): ${snippet}`);
   }
 
