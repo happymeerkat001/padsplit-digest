@@ -1,0 +1,1071 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PadSplit Digest — Architecture Explorer</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2a2d3a;
+      --text: #e2e8f0;
+      --muted: #8892a4;
+      --accent: #3b82f6;
+      --green: #10b981;
+      --amber: #f59e0b;
+      --red: #ef4444;
+      --purple: #a78bfa;
+      --pink: #f472b6;
+      --orange: #fb923c;
+      --cyan: #22d3ee;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, monospace;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      grid-template-rows: 1fr auto;
+      height: 100vh;
+    }
+
+    .sidebar {
+      grid-row: 1 / -1;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+      padding: 16px;
+    }
+
+    .sidebar h1 {
+      font-size: 14px;
+      color: var(--accent);
+      margin-bottom: 4px;
+      letter-spacing: 0.5px;
+    }
+
+    .sidebar .subtitle {
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 20px;
+    }
+
+    .section-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--muted);
+      margin: 18px 0 8px;
+    }
+
+    .preset-btn {
+      display: block;
+      width: 100%;
+      padding: 8px 10px;
+      margin-bottom: 4px;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 12px;
+      text-align: left;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .preset-btn:hover { background: rgba(59,130,246,0.1); border-color: var(--accent); }
+    .preset-btn.active { background: rgba(59,130,246,0.15); border-color: var(--accent); color: var(--accent); }
+
+    .layer-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 0;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .layer-toggle input { accent-color: var(--accent); }
+
+    .layer-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .conn-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 0;
+      cursor: pointer;
+      font-size: 11px;
+    }
+
+    .conn-toggle input { accent-color: var(--accent); }
+
+    .conn-line {
+      width: 20px;
+      height: 2px;
+      flex-shrink: 0;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--muted);
+      padding: 2px 0;
+    }
+
+    .legend-icon {
+      width: 14px;
+      height: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+    }
+
+    .canvas-area {
+      position: relative;
+      overflow: hidden;
+      background: var(--bg);
+    }
+
+    svg {
+      width: 100%;
+      height: 100%;
+    }
+
+    .node-group { cursor: pointer; }
+    .node-group:hover .node-rect { filter: brightness(1.2); stroke-width: 2; }
+
+    .node-rect {
+      rx: 8;
+      ry: 8;
+      stroke-width: 1.5;
+      transition: filter 0.15s;
+    }
+
+    .node-title {
+      font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+      font-size: 11px;
+      font-weight: 600;
+      fill: #1e293b;
+    }
+
+    .node-subtitle {
+      font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+      font-size: 8.5px;
+      fill: #64748b;
+    }
+
+    .node-io {
+      font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+      font-size: 7.5px;
+      fill: #475569;
+    }
+
+    .detail-panel {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      width: 320px;
+      max-height: calc(100% - 24px);
+      overflow-y: auto;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      font-size: 12px;
+      display: none;
+      z-index: 10;
+    }
+
+    .detail-panel.visible { display: block; }
+
+    .detail-panel h3 {
+      font-size: 13px;
+      color: var(--accent);
+      margin-bottom: 2px;
+    }
+
+    .detail-panel .file-path {
+      font-size: 10px;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+
+    .detail-panel .detail-section {
+      margin-bottom: 10px;
+    }
+
+    .detail-panel .detail-label {
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+
+    .detail-panel .detail-list {
+      list-style: none;
+      padding: 0;
+    }
+
+    .detail-panel .detail-list li {
+      padding: 2px 0;
+      font-size: 11px;
+      color: var(--text);
+    }
+
+    .detail-panel .detail-list li::before {
+      content: '→ ';
+      color: var(--muted);
+    }
+
+    .detail-close {
+      position: absolute;
+      top: 10px;
+      right: 12px;
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 16px;
+      font-family: inherit;
+    }
+
+    .detail-close:hover { color: var(--text); }
+
+    .prompt-area {
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 12px 16px;
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+    }
+
+    .prompt-text {
+      flex: 1;
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.5;
+      max-height: 80px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+
+    .copy-btn {
+      padding: 6px 14px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 11px;
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .copy-btn:hover { filter: brightness(1.15); }
+
+    .layer-separator {
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: 1px;
+      pointer-events: none;
+    }
+
+    .layer-label-bg {
+      font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+      font-size: 10px;
+      fill: #475569;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+    }
+
+    .comment-area {
+      margin-top: 12px;
+    }
+
+    .comment-area textarea {
+      width: 100%;
+      height: 60px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 11px;
+      padding: 8px;
+      resize: vertical;
+    }
+
+    .comment-area textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    .comment-area button {
+      margin-top: 6px;
+      padding: 5px 12px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    .comments-list {
+      margin-top: 10px;
+    }
+
+    .comment-item {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px;
+      margin-bottom: 6px;
+      font-size: 11px;
+    }
+
+    .comment-item .comment-target {
+      font-size: 10px;
+      color: var(--accent);
+      margin-bottom: 3px;
+    }
+
+    .comment-item .comment-text {
+      color: var(--text);
+    }
+
+    .comment-item .comment-delete {
+      float: right;
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .comment-item .comment-delete:hover { color: var(--red); }
+
+    .be-label { color: var(--green); font-size: 9px; font-weight: 700; letter-spacing: 0.5px; }
+    .fe-label { color: var(--cyan); font-size: 9px; font-weight: 700; letter-spacing: 0.5px; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <div class="sidebar">
+      <h1>PadSplit Digest</h1>
+      <p class="subtitle">Architecture Explorer</p>
+
+      <div class="section-label">Views</div>
+      <div id="presets"></div>
+
+      <div class="section-label">Layers</div>
+      <div id="layers"></div>
+
+      <div class="section-label">Connections</div>
+      <div id="connections"></div>
+
+      <div class="section-label">Comments (<span id="comment-count">0</span>)</div>
+      <div class="comments-list" id="comments-list"></div>
+    </div>
+
+    <div class="canvas-area" id="canvas-area">
+      <svg id="diagram" xmlns="http://www.w3.org/2000/svg"></svg>
+      <div class="detail-panel" id="detail-panel">
+        <button class="detail-close" onclick="closeDetail()">&times;</button>
+        <div id="detail-content"></div>
+      </div>
+    </div>
+
+    <div class="prompt-area">
+      <div class="prompt-text" id="prompt-output">Click a component to explore. Toggle layers to focus on backend or frontend.</div>
+      <button class="copy-btn" onclick="copyPrompt()">Copy Prompt</button>
+    </div>
+  </div>
+
+<script>
+const LAYERS = [
+  { id: 'ingestion',    label: 'Ingestion (API)',    color: '#fef3c7', dot: '#f59e0b', side: 'backend' },
+  { id: 'data',         label: 'Data (SQLite)',      color: '#fce7f3', dot: '#f472b6', side: 'backend' },
+  { id: 'logic',        label: 'Classification',     color: '#dcfce7', dot: '#10b981', side: 'backend' },
+  { id: 'rendering',    label: 'Rendering (HTML)',   color: '#dbeafe', dot: '#3b82f6', side: 'frontend' },
+  { id: 'deployment',   label: 'Deployment',         color: '#f3e8ff', dot: '#a78bfa', side: 'backend' },
+  { id: 'orchestrator', label: 'Orchestrator',       color: '#e0f2fe', dot: '#0ea5e9', side: 'backend' },
+  { id: 'utility',      label: 'Utilities',          color: '#f1f5f9', dot: '#94a3b8', side: 'shared' },
+  { id: 'external',     label: 'External Services',  color: '#fef9c3', dot: '#eab308', side: 'external' },
+];
+
+const CONN_TYPES = [
+  { id: 'data-flow',  label: 'Data Flow',   color: '#3b82f6', dash: '' },
+  { id: 'calls',      label: 'Function Call', color: '#10b981', dash: '6,3' },
+  { id: 'writes',     label: 'Writes/Reads', color: '#f59e0b', dash: '4,4' },
+  { id: 'deploys',    label: 'Deploy',       color: '#a78bfa', dash: '8,4' },
+];
+
+const NODES = [
+  // Orchestrator layer (y: 20)
+  { id: 'index', label: 'index.ts', subtitle: 'src/index.ts', layer: 'orchestrator',
+    x: 420, y: 20, w: 160, h: 60,
+    inputs: ['Cron schedule', 'CLI flags (--once, --no-deploy)'],
+    outputs: ['Pipeline execution', 'Process signals'],
+    memory: ['lastDeployedAt (timestamp)', 'isPipelineRunning (bool)'],
+    exports: ['runPipeline()', 'runOnce()', 'startScheduler()'],
+    description: 'Main entry point. Orchestrates the full pipeline: fetch → classify → build → deploy. Runs on cron (every 30 min) or single-shot.' },
+
+  { id: 'config', label: 'config.ts', subtitle: 'src/config.ts', layer: 'utility',
+    x: 680, y: 20, w: 160, h: 60,
+    inputs: ['.env vars', 'PADSPLIT_COOKIE', 'OPENAI_API_KEY'],
+    outputs: ['config object', 'SENDER_CATEGORIES'],
+    memory: ['Creates data/ directory'],
+    exports: ['config', 'SENDER_CATEGORIES', 'resolveSenderCategory()', 'validateConfig()'],
+    description: 'Configuration loader. Reads env vars, defines sender categories (support, maintenance, tasks, member_messages, others), validates setup.' },
+
+  // Ingestion layer (y: 130)
+  { id: 'client', label: 'client.ts', subtitle: 'src/api/client.ts', layer: 'ingestion',
+    x: 120, y: 130, w: 160, h: 60,
+    inputs: ['PADSPLIT_COOKIE (session + csrf)', 'API endpoint paths'],
+    outputs: ['Parsed JSON responses', 'AuthError / SchemaError'],
+    memory: ['None (stateless)'],
+    exports: ['apiGet<T>(path)', 'graphqlRequest<T>(body)', 'getSessionCookie()', 'AuthError', 'SchemaError', 'DataIntegrityError'],
+    description: 'HTTP client. Extracts csrftoken from cookie, sends X-CSRFToken + Origin + Referer headers. 30s timeout via AbortSignal.' },
+
+  { id: 'tickets', label: 'tickets.ts', subtitle: 'src/api/tickets.ts', layer: 'ingestion',
+    x: 340, y: 130, w: 160, h: 60,
+    inputs: ['REST: /api/admin-new/property/maintenance/tickets/'],
+    outputs: ['Ticket[] (normalized)', 'InboxMessage[] (converted)'],
+    memory: ['None (stateless)'],
+    exports: ['fetchTickets()', 'ticketsToInboxMessages()', 'Ticket', 'InboxMessage'],
+    description: 'Fetches ALL maintenance tickets via REST. Normalizes raw JSON → Ticket type. Converts to InboxMessage[] for pipeline. Throws on empty response.' },
+
+  { id: 'messages', label: 'messages.ts', subtitle: 'src/api/messages.ts', layer: 'ingestion',
+    x: 560, y: 130, w: 160, h: 60,
+    inputs: ['GraphQL: /api/graphql/'],
+    outputs: ['InboxMessage[] (currently empty)'],
+    memory: ['None (stateless)'],
+    exports: ['fetchMessages()'],
+    description: 'Fetches member conversations via GraphQL. Currently disabled (returns []). Will use graphqlRequest() with operationName + query once schema is known.' },
+
+  // Data layer (y: 240)
+  { id: 'db-init', label: 'init.ts', subtitle: 'src/db/init.ts', layer: 'data',
+    x: 200, y: 240, w: 150, h: 60,
+    inputs: ['DB_PATH env var', 'schema.sql'],
+    outputs: ['Database singleton'],
+    memory: ['SQLite file (WAL mode)', 'db singleton (module-level)'],
+    exports: ['getDb()', 'closeDb()'],
+    description: 'Lazy-loaded SQLite singleton. Creates tables from schema.sql on first access. WAL journal mode for concurrent reads.' },
+
+  { id: 'db-items', label: 'items.ts', subtitle: 'src/db/items.ts', layer: 'data',
+    x: 420, y: 240, w: 150, h: 60,
+    inputs: ['DigestItem objects', 'Classification results'],
+    outputs: ['Query results', 'Row IDs'],
+    memory: ['digest_items table', 'digests table'],
+    exports: ['insertItem()', 'itemExists()', 'getPendingItems()', 'getVisibleClassifiedItems()', 'updateItemClassification()', 'markItemsSent()', 'createDigest()'],
+    description: 'CRUD for digest_items + digests tables. Deduplication via external_id UNIQUE. Status flow: pending → classified → sent.' },
+
+  { id: 'schema', label: 'schema.sql', subtitle: 'src/db/schema.sql', layer: 'data',
+    x: 640, y: 240, w: 150, h: 60,
+    inputs: ['DDL statements'],
+    outputs: ['digest_items table', 'digests table'],
+    memory: ['4 indexes (status, received_at, external_id, house+tenant)'],
+    exports: [],
+    description: 'Schema: digest_items (source, external_id, subject, body_raw, intent, urgency, status, resolved_flag) + digests (sent_at, item_count, visible_items_hash).' },
+
+  // Classification layer (y: 350)
+  { id: 'classifier', label: 'index.ts', subtitle: 'src/classifier/index.ts', layer: 'logic',
+    x: 180, y: 350, w: 160, h: 60,
+    inputs: ['Pending items from DB'],
+    outputs: ['Classified count', 'DB updates'],
+    memory: ['None'],
+    exports: ['classifyMessage(text)', 'classifyPendingItems()'],
+    description: 'Orchestrator: rules first → if confidence < 0.7 → try LLM → fallback to rules on error. High-risk keywords are always authoritative.' },
+
+  { id: 'rules', label: 'rules.ts', subtitle: 'src/classifier/rules.ts', layer: 'logic',
+    x: 400, y: 350, w: 160, h: 60,
+    inputs: ['Raw message text'],
+    outputs: ['intent, confidence, urgency, high_risk flag'],
+    memory: ['None (pure functions)'],
+    exports: ['classifyWithRules()', 'containsHighRiskLanguage()', 'detectIntent()', 'computeUrgency()'],
+    description: 'Deterministic keyword classifier. Intents: maintenance, money, move_in, move_out, gratitude, unknown. Confidence 0–0.85. Pure functions, no side effects.' },
+
+  { id: 'llm', label: 'llm.ts', subtitle: 'src/classifier/llm.ts', layer: 'logic',
+    x: 620, y: 350, w: 160, h: 60,
+    inputs: ['Message text', 'OPENAI_API_KEY'],
+    outputs: ['LLM classification (intent, confidence, reason)'],
+    memory: ['OpenAI client singleton (lazy)'],
+    exports: ['classifyWithLLM(text)'],
+    description: 'Fallback: calls gpt-4o-mini with system prompt. Used only when rules confidence < 0.7. Has retry via withRetry(). Optional (skipped if no API key).' },
+
+  // Rendering layer (y: 460)
+  { id: 'builder', label: 'builder.ts', subtitle: 'src/digest/builder.ts', layer: 'rendering',
+    x: 300, y: 460, w: 200, h: 60,
+    inputs: ['Classified items from DB', 'Config (filters, timezone)'],
+    outputs: ['HTML file in /out/', 'Digest record in DB'],
+    memory: ['/out/digest-{ts}.html files', 'deploy-meta.json read'],
+    exports: ['buildDigest(newItemCount?)'],
+    description: 'THE FRONTEND. Queries classified items, groups by sender category, renders HTML with tables (messages) + Kanban board (tasks). No-op detection via SHA256 hash of visible item IDs.' },
+
+  // Deployment layer (y: 570)
+  { id: 'publish', label: 'publish.ts', subtitle: 'src/deploy/publish.ts', layer: 'deployment',
+    x: 300, y: 570, w: 200, h: 60,
+    inputs: ['Digest HTML path from builder'],
+    outputs: ['/public/index.html', '/public/archives/', 'Firebase deployment'],
+    memory: ['/public/ directory', 'deploy-meta.json', '/public/archives/'],
+    exports: ['publishToPublic()', 'generateHistoryPage()', 'firebaseDeploy()'],
+    description: 'Copies digest → /public/index.html + archive. Generates history.html listing. Runs firebase deploy --only hosting. Rate-limited (30 min default).' },
+
+  // Utilities (y: 130, right side)
+  { id: 'logger', label: 'logger.ts', subtitle: 'src/utils/logger.ts', layer: 'utility',
+    x: 830, y: 130, w: 130, h: 50,
+    inputs: ['Level, message, data object'],
+    outputs: ['JSON log lines to stdout/stderr'],
+    memory: ['None'],
+    exports: ['logger.debug/info/warn/error/fatal()'],
+    description: 'Structured JSON logging. Every function uses it. Levels: debug, info, warn, error, fatal.' },
+
+  { id: 'retry', label: 'retry.ts', subtitle: 'src/utils/retry.ts', layer: 'utility',
+    x: 830, y: 200, w: 130, h: 50,
+    inputs: ['Async function, retry options'],
+    outputs: ['Result or last error thrown'],
+    memory: ['None'],
+    exports: ['withRetry<T>(fn, options?)'],
+    description: 'Exponential backoff. maxAttempts=3, baseDelay=1s, maxDelay=30s. Used by LLM classifier.' },
+
+  // External services
+  { id: 'padsplit-api', label: 'PadSplit API', subtitle: 'padsplit.com/api/', layer: 'external',
+    x: 120, y: 20, w: 150, h: 50,
+    inputs: ['Cookie + CSRF token'],
+    outputs: ['Tickets JSON', 'GraphQL responses'],
+    memory: ['Server-side session'],
+    exports: [],
+    description: 'REST: /api/admin-new/property/maintenance/tickets/ (all tickets, no pagination). GraphQL: /api/graphql/ (conversations, schema TBD).' },
+
+  { id: 'openai', label: 'OpenAI API', subtitle: 'api.openai.com', layer: 'external',
+    x: 830, y: 350, w: 130, h: 50,
+    inputs: ['API key', 'Message text + system prompt'],
+    outputs: ['Classification JSON'],
+    memory: ['None'],
+    exports: [],
+    description: 'gpt-4o-mini. Used as fallback classifier when rules have low confidence. Optional — pipeline works without it.' },
+
+  { id: 'firebase', label: 'Firebase Hosting', subtitle: 'firebase.google.com', layer: 'external',
+    x: 560, y: 570, w: 160, h: 50,
+    inputs: ['/public/ directory'],
+    outputs: ['Live URL'],
+    memory: ['Hosted files'],
+    exports: [],
+    description: 'Static hosting. Receives /public/ contents via firebase deploy CLI. Serves the latest digest + archive history.' },
+];
+
+const CONNECTIONS = [
+  // Orchestrator → API
+  { from: 'index', to: 'tickets', type: 'calls', label: 'fetchTickets()' },
+  { from: 'index', to: 'messages', type: 'calls', label: 'fetchMessages()' },
+  // API → Client
+  { from: 'tickets', to: 'client', type: 'calls', label: 'apiGet()' },
+  { from: 'messages', to: 'client', type: 'calls', label: 'graphqlRequest()' },
+  // Client → External
+  { from: 'client', to: 'padsplit-api', type: 'data-flow', label: 'HTTP + Cookie' },
+  // Orchestrator → DB
+  { from: 'index', to: 'db-items', type: 'writes', label: 'insertItem()' },
+  // Orchestrator → Classifier
+  { from: 'index', to: 'classifier', type: 'calls', label: 'classifyPendingItems()' },
+  // Classifier → DB
+  { from: 'classifier', to: 'db-items', type: 'writes', label: 'getPendingItems() + update' },
+  // Classifier → Rules / LLM
+  { from: 'classifier', to: 'rules', type: 'calls', label: 'classifyWithRules()' },
+  { from: 'classifier', to: 'llm', type: 'calls', label: 'classifyWithLLM()' },
+  // LLM → External
+  { from: 'llm', to: 'openai', type: 'data-flow', label: 'gpt-4o-mini' },
+  // Orchestrator → Builder
+  { from: 'index', to: 'builder', type: 'calls', label: 'buildDigest()' },
+  // Builder → DB
+  { from: 'builder', to: 'db-items', type: 'writes', label: 'getVisibleClassifiedItems()' },
+  // Orchestrator → Deploy
+  { from: 'index', to: 'publish', type: 'calls', label: 'publishToPublic()' },
+  // Deploy → Firebase
+  { from: 'publish', to: 'firebase', type: 'deploys', label: 'firebase deploy' },
+  // DB init → schema
+  { from: 'db-init', to: 'schema', type: 'writes', label: 'CREATE TABLE' },
+  // DB items uses DB init
+  { from: 'db-items', to: 'db-init', type: 'calls', label: 'getDb()' },
+  // Config used by many
+  { from: 'index', to: 'config', type: 'calls', label: 'config' },
+  // LLM → retry
+  { from: 'llm', to: 'retry', type: 'calls', label: 'withRetry()' },
+];
+
+const PRESETS = [
+  { id: 'full', label: 'Full System',
+    layers: ['ingestion','data','logic','rendering','deployment','orchestrator','utility','external'] },
+  { id: 'backend', label: 'Backend Only',
+    layers: ['ingestion','data','logic','orchestrator','utility','external'] },
+  { id: 'frontend', label: 'Frontend Only',
+    layers: ['rendering','deployment','data','external'] },
+  { id: 'data-flow', label: 'Data Pipeline',
+    layers: ['ingestion','data','logic','rendering','orchestrator','external'] },
+  { id: 'ingestion', label: 'Ingestion Focus',
+    layers: ['ingestion','external','utility'] },
+];
+
+const state = {
+  layers: {},
+  connTypes: {},
+  activePreset: 'full',
+  selectedNode: null,
+  comments: [],
+};
+
+// Initialize state
+LAYERS.forEach(l => state.layers[l.id] = true);
+CONN_TYPES.forEach(c => state.connTypes[c.id] = true);
+
+function buildSidebar() {
+  const presetsEl = document.getElementById('presets');
+  PRESETS.forEach(p => {
+    const btn = document.createElement('button');
+    btn.className = 'preset-btn' + (p.id === state.activePreset ? ' active' : '');
+    btn.textContent = p.label;
+    btn.onclick = () => applyPreset(p.id);
+    btn.dataset.preset = p.id;
+    presetsEl.appendChild(btn);
+  });
+
+  const layersEl = document.getElementById('layers');
+  LAYERS.forEach(l => {
+    const label = document.createElement('label');
+    label.className = 'layer-toggle';
+    const side = l.side === 'backend' ? '<span class="be-label">BE</span>' :
+                 l.side === 'frontend' ? '<span class="fe-label">FE</span>' :
+                 l.side === 'shared' ? '<span style="color:#94a3b8;font-size:9px">SHARED</span>' :
+                 '<span style="color:#eab308;font-size:9px">EXT</span>';
+    label.innerHTML = `<input type="checkbox" checked data-layer="${l.id}">
+      <span class="layer-dot" style="background:${l.dot}"></span>
+      ${l.label} ${side}`;
+    label.querySelector('input').addEventListener('change', (e) => {
+      state.layers[l.id] = e.target.checked;
+      state.activePreset = null;
+      document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+      renderAll();
+    });
+    layersEl.appendChild(label);
+  });
+
+  const connsEl = document.getElementById('connections');
+  CONN_TYPES.forEach(c => {
+    const label = document.createElement('label');
+    label.className = 'conn-toggle';
+    label.innerHTML = `<input type="checkbox" checked data-conn="${c.id}">
+      <span class="conn-line" style="background:${c.color}; ${c.dash ? `background: repeating-linear-gradient(90deg, ${c.color} 0, ${c.color} 4px, transparent 4px, transparent 7px)` : ''}"></span>
+      ${c.label}`;
+    label.querySelector('input').addEventListener('change', (e) => {
+      state.connTypes[c.id] = e.target.checked;
+      renderAll();
+    });
+    connsEl.appendChild(label);
+  });
+}
+
+function applyPreset(id) {
+  const preset = PRESETS.find(p => p.id === id);
+  if (!preset) return;
+  state.activePreset = id;
+
+  LAYERS.forEach(l => {
+    state.layers[l.id] = preset.layers.includes(l.id);
+  });
+
+  document.querySelectorAll('[data-layer]').forEach(cb => {
+    cb.checked = state.layers[cb.dataset.layer];
+  });
+
+  document.querySelectorAll('.preset-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.preset === id);
+  });
+
+  renderAll();
+}
+
+function getNodeCenter(node) {
+  return { x: node.x + node.w / 2, y: node.y + node.h / 2 };
+}
+
+function getConnectionPort(fromNode, toNode) {
+  const fc = getNodeCenter(fromNode);
+  const tc = getNodeCenter(toNode);
+  const dx = tc.x - fc.x;
+  const dy = tc.y - fc.y;
+
+  let fx, fy, tx, ty;
+
+  if (Math.abs(dy) > Math.abs(dx) * 0.5) {
+    if (dy > 0) {
+      fx = fc.x; fy = fromNode.y + fromNode.h;
+      tx = tc.x; ty = toNode.y;
+    } else {
+      fx = fc.x; fy = fromNode.y;
+      tx = tc.x; ty = toNode.y + toNode.h;
+    }
+  } else {
+    if (dx > 0) {
+      fx = fromNode.x + fromNode.w; fy = fc.y;
+      tx = toNode.x; ty = tc.y;
+    } else {
+      fx = fromNode.x; fy = fc.y;
+      tx = toNode.x + toNode.w; ty = tc.y;
+    }
+  }
+
+  return { fx, fy, tx, ty };
+}
+
+function renderDiagram() {
+  const svg = document.getElementById('diagram');
+  svg.innerHTML = '';
+  svg.setAttribute('viewBox', '0 0 1020 660');
+
+  // Defs for arrowheads
+  const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+  CONN_TYPES.forEach(c => {
+    const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+    marker.setAttribute('id', `arrow-${c.id}`);
+    marker.setAttribute('markerWidth', '8');
+    marker.setAttribute('markerHeight', '6');
+    marker.setAttribute('refX', '7');
+    marker.setAttribute('refY', '3');
+    marker.setAttribute('orient', 'auto');
+    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+    poly.setAttribute('points', '0 0, 8 3, 0 6');
+    poly.setAttribute('fill', c.color);
+    marker.appendChild(poly);
+    defs.appendChild(marker);
+  });
+  svg.appendChild(defs);
+
+  // Layer bands
+  const bands = [
+    { y: 5, h: 100, label: 'ORCHESTRATOR + CONFIG', layer: 'orchestrator' },
+    { y: 115, h: 100, label: 'INGESTION (API)', layer: 'ingestion' },
+    { y: 225, h: 100, label: 'DATA (SQLITE)', layer: 'data' },
+    { y: 335, h: 100, label: 'CLASSIFICATION', layer: 'logic' },
+    { y: 445, h: 100, label: 'RENDERING (HTML)', layer: 'rendering' },
+    { y: 555, h: 80, label: 'DEPLOYMENT', layer: 'deployment' },
+  ];
+
+  bands.forEach(band => {
+    if (!state.layers[band.layer]) return;
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', '0');
+    rect.setAttribute('y', band.y);
+    rect.setAttribute('width', '1020');
+    rect.setAttribute('height', band.h);
+    rect.setAttribute('fill', 'rgba(255,255,255,0.015)');
+    rect.setAttribute('rx', '4');
+    svg.appendChild(rect);
+
+    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    text.setAttribute('x', '10');
+    text.setAttribute('y', band.y + 14);
+    text.setAttribute('class', 'layer-label-bg');
+    text.textContent = band.label;
+    svg.appendChild(text);
+  });
+
+  const visibleNodes = NODES.filter(n => state.layers[n.layer]);
+  const visibleIds = new Set(visibleNodes.map(n => n.id));
+
+  // Connections
+  CONNECTIONS.forEach(conn => {
+    if (!state.connTypes[conn.type]) return;
+    if (!visibleIds.has(conn.from) || !visibleIds.has(conn.to)) return;
+
+    const fromNode = NODES.find(n => n.id === conn.from);
+    const toNode = NODES.find(n => n.id === conn.to);
+    const { fx, fy, tx, ty } = getConnectionPort(fromNode, toNode);
+
+    const connType = CONN_TYPES.find(c => c.id === conn.type);
+    const mx = (fx + tx) / 2;
+    const my = (fy + ty) / 2;
+
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    const cp1x = fx + (mx - fx) * 0.1;
+    const cp1y = my;
+    const cp2x = tx - (tx - mx) * 0.1;
+    const cp2y = my;
+    path.setAttribute('d', `M ${fx} ${fy} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${tx} ${ty}`);
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', connType.color);
+    path.setAttribute('stroke-width', '1.5');
+    path.setAttribute('stroke-opacity', '0.5');
+    if (connType.dash) path.setAttribute('stroke-dasharray', connType.dash);
+    path.setAttribute('marker-end', `url(#arrow-${conn.type})`);
+    svg.appendChild(path);
+
+    if (conn.label) {
+      const labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      labelEl.setAttribute('x', mx);
+      labelEl.setAttribute('y', my - 4);
+      labelEl.setAttribute('text-anchor', 'middle');
+      labelEl.setAttribute('fill', connType.color);
+      labelEl.setAttribute('font-size', '7.5');
+      labelEl.setAttribute('font-family', 'ui-monospace, SF Mono, Menlo, monospace');
+      labelEl.setAttribute('opacity', '0.7');
+      labelEl.textContent = conn.label;
+      svg.appendChild(labelEl);
+    }
+  });
+
+  // Nodes
+  visibleNodes.forEach(node => {
+    const layer = LAYERS.find(l => l.id === node.layer);
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.setAttribute('class', 'node-group');
+    g.onclick = () => showDetail(node);
+
+    const hasComment = state.comments.some(c => c.target === node.id);
+
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('class', 'node-rect');
+    rect.setAttribute('x', node.x);
+    rect.setAttribute('y', node.y);
+    rect.setAttribute('width', node.w);
+    rect.setAttribute('height', node.h);
+    rect.setAttribute('fill', layer.color);
+    rect.setAttribute('stroke', hasComment ? '#3b82f6' : '#94a3b8');
+    if (hasComment) rect.setAttribute('stroke-width', '2.5');
+    g.appendChild(rect);
+
+    // Side badge
+    const badgeColor = layer.side === 'backend' ? '#10b981' :
+                       layer.side === 'frontend' ? '#22d3ee' :
+                       layer.side === 'external' ? '#eab308' : '#94a3b8';
+    const badgeRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    badgeRect.setAttribute('x', node.x + node.w - 22);
+    badgeRect.setAttribute('y', node.y + 3);
+    badgeRect.setAttribute('width', 19);
+    badgeRect.setAttribute('height', 11);
+    badgeRect.setAttribute('rx', '3');
+    badgeRect.setAttribute('fill', badgeColor);
+    badgeRect.setAttribute('opacity', '0.2');
+    g.appendChild(badgeRect);
+
+    const badgeText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    badgeText.setAttribute('x', node.x + node.w - 12.5);
+    badgeText.setAttribute('y', node.y + 11);
+    badgeText.setAttribute('text-anchor', 'middle');
+    badgeText.setAttribute('fill', badgeColor);
+    badgeText.setAttribute('font-size', '6.5');
+    badgeText.setAttribute('font-weight', '700');
+    badgeText.setAttribute('font-family', 'ui-monospace, SF Mono, Menlo, monospace');
+    badgeText.textContent = layer.side === 'backend' ? 'BE' :
+                             layer.side === 'frontend' ? 'FE' :
+                             layer.side === 'external' ? 'EXT' : '~';
+    g.appendChild(badgeText);
+
+    const title = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    title.setAttribute('class', 'node-title');
+    title.setAttribute('x', node.x + 10);
+    title.setAttribute('y', node.y + 18);
+    title.textContent = node.label;
+    g.appendChild(title);
+
+    const sub = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    sub.setAttribute('class', 'node-subtitle');
+    sub.setAttribute('x', node.x + 10);
+    sub.setAttribute('y', node.y + 30);
+    sub.textContent = node.subtitle;
+    g.appendChild(sub);
+
+    // IO summary
+    if (node.inputs.length > 0) {
+      const ioText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      ioText.setAttribute('class', 'node-io');
+      ioText.setAttribute('x', node.x + 10);
+      ioText.setAttribute('y', node.y + 42);
+      const inLabel = `IN: ${node.inputs.length}`;
+      const outLabel = `OUT: ${node.outputs.length}`;
+      const memLabel = node.memory[0] !== 'None' && node.memory[0] !== 'None (stateless)' ? ` MEM: ${node.memory.length}` : '';
+      ioText.textContent = `${inLabel}  ${outLabel}${memLabel}`;
+      g.appendChild(ioText);
+    }
+
+    svg.appendChild(g);
+  });
+}
+
+function showDetail(node) {
+  state.selectedNode = node;
+  const panel = document.getElementById('detail-panel');
+  const content = document.getElementById('detail-content');
+  const layer = LAYERS.find(l => l.id === node.layer);
+
+  const sideLabel = layer.side === 'backend' ? '<span class="be-label">BACKEND</span>' :
+                    layer.side === 'frontend' ? '<span class="fe-label">FRONTEND</span>' :
+                    layer.side === 'external' ? '<span style="color:#eab308;font-size:9px;font-weight:700">EXTERNAL</span>' :
+                    '<span style="color:#94a3b8;font-size:9px;font-weight:700">SHARED</span>';
+
+  content.innerHTML = `
+    <h3>${node.label} ${sideLabel}</h3>
+    <p class="file-path">${node.subtitle}</p>
+    <p style="font-size:11px;color:var(--text);margin-bottom:14px;line-height:1.5">${node.description}</p>
+
+    <div class="detail-section">
+      <div class="detail-label">Inputs</div>
+      <ul class="detail-list">${node.inputs.map(i => `<li>${i}</li>`).join('')}</ul>
+    </div>
+
+    <div class="detail-section">
+      <div class="detail-label">Outputs</div>
+      <ul class="detail-list">${node.outputs.map(o => `<li>${o}</li>`).join('')}</ul>
+    </div>
+
+    <div class="detail-section">
+      <div class="detail-label">Memory / State</div>
+      <ul class="detail-list">${node.memory.map(m => `<li>${m}</li>`).join('')}</ul>
+    </div>
+
+    ${node.exports.length > 0 ? `<div class="detail-section">
+      <div class="detail-label">Exports</div>
+      <ul class="detail-list">${node.exports.map(e => `<li style="font-size:10px;color:var(--muted)">${e}</li>`).join('')}</ul>
+    </div>` : ''}
+
+    <div class="comment-area">
+      <div class="detail-label">Add Comment</div>
+      <textarea id="comment-input" placeholder="Notes about this component..."></textarea>
+      <button onclick="addComment()">Add</button>
+    </div>
+  `;
+
+  panel.classList.add('visible');
+  updatePrompt();
+}
+
+function closeDetail() {
+  document.getElementById('detail-panel').classList.remove('visible');
+  state.selectedNode = null;
+}
+
+function addComment() {
+  const input = document.getElementById('comment-input');
+  const text = input.value.trim();
+  if (!text || !state.selectedNode) return;
+
+  state.comments.push({
+    id: Date.now(),
+    target: state.selectedNode.id,
+    targetLabel: state.selectedNode.label,
+    targetFile: state.selectedNode.subtitle,
+    text,
+  });
+
+  input.value = '';
+  renderComments();
+  renderDiagram();
+  updatePrompt();
+}
+
+function removeComment(id) {
+  state.comments = state.comments.filter(c => c.id !== id);
+  renderComments();
+  renderDiagram();
+  updatePrompt();
+}
+
+function renderComments() {
+  const list = document.getElementById('comments-list');
+  document.getElementById('comment-count').textContent = state.comments.length;
+
+  if (state.comments.length === 0) {
+    list.innerHTML = '<p style="font-size:11px;color:var(--muted)">Click a component to add notes.</p>';
+    return;
+  }
+
+  list.innerHTML = state.comments.map(c => `
+    <div class="comment-item">
+      <button class="comment-delete" onclick="removeComment(${c.id})">&times;</button>
+      <div class="comment-target">${c.targetLabel} <span style="color:var(--muted)">${c.targetFile}</span></div>
+      <div class="comment-text">${c.text}</div>
+    </div>
+  `).join('');
+}
+
+function updatePrompt() {
+  const el = document.getElementById('prompt-output');
+  const visibleLayers = LAYERS.filter(l => state.layers[l.id]);
+  const allVisible = visibleLayers.length === LAYERS.length;
+
+  const parts = [];
+  parts.push('PadSplit Digest architecture');
+
+  if (!allVisible) {
+    const names = visibleLayers.map(l => l.label).join(', ');
+    parts.push(`showing: ${names}`);
+  }
+
+  const beLayers = visibleLayers.filter(l => l.side === 'backend');
+  const feLayers = visibleLayers.filter(l => l.side === 'frontend');
+
+  if (beLayers.length > 0 && feLayers.length === 0) {
+    parts.push('Backend focus: API ingestion → SQLite → Classification pipeline');
+  } else if (feLayers.length > 0 && beLayers.length === 0) {
+    parts.push('Frontend focus: Digest HTML rendering → Firebase Hosting');
+  }
+
+  if (state.selectedNode) {
+    parts.push(`\nSelected: ${state.selectedNode.label} (${state.selectedNode.subtitle})`);
+    parts.push(state.selectedNode.description);
+  }
+
+  if (state.comments.length > 0) {
+    parts.push('\nNotes:');
+    state.comments.forEach(c => {
+      parts.push(`- ${c.targetLabel} (${c.targetFile}): ${c.text}`);
+    });
+  }
+
+  el.textContent = parts.join('\n');
+}
+
+function copyPrompt() {
+  const text = document.getElementById('prompt-output').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.querySelector('.copy-btn');
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy Prompt', 1500);
+  });
+}
+
+function renderAll() {
+  renderDiagram();
+  updatePrompt();
+}
+
+// Init
+buildSidebar();
+renderComments();
+renderAll();
+</script>
+</body>
+</html>
