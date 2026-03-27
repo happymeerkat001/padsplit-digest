@@ -1,6 +1,8 @@
 import cron from 'node-cron';
-import { readdirSync, unlinkSync } from 'node:fs';
+import { existsSync, readdirSync, unlinkSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { getPadsplitCookies } from './api/auth.js';
+import { AuthError, setSessionCookie } from './api/client.js';
 import { fetchMessages } from './api/messages.js';
 import { fetchTickets, ticketsToInboxMessages } from './api/tickets.js';
 import { classifyPendingItems } from './classifier/index.js';
@@ -44,6 +46,22 @@ async function runPipeline(): Promise<void> {
   logger.info('Pipeline started');
 
   try {
+    if (!config.padsplit.cookie && existsSync(config.padsplit.sessionPath)) {
+      try {
+        const cookie = await getPadsplitCookies();
+        setSessionCookie(cookie);
+        logger.info('PadSplit session cookies loaded from persistent browser session');
+      } catch (err) {
+        if (err instanceof AuthError) {
+          logger.error('PadSplit auth failed — re-run `npm run setup-session` and copy session to VPS', {
+            error: String(err),
+          });
+          throw err;
+        }
+        throw err;
+      }
+    }
+
     logger.info('Step 1: Fetching PadSplit data via API');
 
     const tickets = await fetchTickets();
@@ -147,8 +165,15 @@ async function runPipeline(): Promise<void> {
 
 async function runOnce(): Promise<void> {
   logger.info('Running one digest cycle');
-  await runPipeline();
-  closeDb();
+  try {
+    await runPipeline();
+    closeDb();
+    logger.info('Single run complete');
+    process.exit(0); // <--- Add this line to tell the VPS the job is finished
+  } catch (err) {
+    logger.error('Single run failed', { error: String(err) });
+    process.exit(1); // <--- Add this line so you know it failed
+  }
 }
 
 function startScheduler(): void {

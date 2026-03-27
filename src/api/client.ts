@@ -29,8 +29,14 @@ export class DataIntegrityError extends Error {
   override name = 'DataIntegrityError';
 }
 
+let _cookieOverride: string | null = null;
+
+export function setSessionCookie(cookie: string): void {
+  _cookieOverride = cookie;
+}
+
 export function getSessionCookie(): string {
-  const cookie = (process.env['PADSPLIT_COOKIE'] ?? '').trim();
+  const cookie = (_cookieOverride ?? process.env['PADSPLIT_COOKIE'] ?? '').trim();
   if (!cookie) {
     throw new AuthError('PADSPLIT_COOKIE is missing');
   }

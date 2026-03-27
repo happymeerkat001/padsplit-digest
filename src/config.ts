@@ -78,6 +78,7 @@ export const config = { // call in config, main configuration object for the app
     cookie: optional('PADSPLIT_COOKIE', ''),
     communicationUrl: optional('PADSPLIT_COMMUNICATION_URL', 'https://www.padsplit.com/host/communication'),
     tasksUrl: optional('PADSPLIT_TASKS_URL', 'https://www.padsplit.com/host/tasks'),
+    sessionPath: optional('PADSPLIT_SESSION_PATH', './data/browser-session'),
   },
   honeywell: {
     username: optional('HONEYWELL_USERNAME', ''),
@@ -108,8 +109,8 @@ export const config = { // call in config, main configuration object for the app
 export function validateConfig(): string[] { // run for- no input, Out- string array. Control-returns warnings to caller 
   const warnings: string[] = [];
 
-  if (!config.padsplit.cookie) {
-    warnings.push('PADSPLIT_COOKIE is not set (PadSplit API ingestion disabled)');
+  if (!config.padsplit.cookie && !existsSync(config.padsplit.sessionPath)) {
+    warnings.push('PADSPLIT_COOKIE is not set and no browser session found (PadSplit API ingestion disabled)');
   }
 
   if (!config.openai.apiKey) {
