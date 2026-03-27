@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PadSplit Digest — Architecture Map</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #222533;
+    --border: #2e3144;
+    --text: #e2e8f0;
+    --text-muted: #6b7280;
+    --accent: #6366f1;
+    --accent2: #818cf8;
+  }
+  body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; font-size: 13px; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+  h1 { font-size: 14px; font-weight: 600; color: var(--accent2); letter-spacing: 0.05em; text-transform: uppercase; }
+
+  /* Layout */
+  .app { display: flex; flex: 1; overflow: hidden; }
+  .sidebar { width: 220px; min-width: 220px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; }
+  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .canvas-wrap { flex: 1; overflow: hidden; position: relative; }
+  .bottom { border-top: 1px solid var(--border); padding: 12px 16px; background: var(--surface); display: flex; gap: 12px; align-items: flex-start; min-height: 80px; max-height: 130px; }
+
+  /* Header */
+  .topbar { background: var(--surface); border-bottom: 1px solid var(--border); padding: 10px 16px; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+  .zoom-btns { display: flex; gap: 4px; margin-left: auto; }
+  .zoom-btns button { background: var(--surface2); border: 1px solid var(--border); color: var(--text); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+  .zoom-btns button:hover { border-color: var(--accent); color: var(--accent2); }
+
+  /* Sidebar sections */
+  .section { border-bottom: 1px solid var(--border); padding: 12px; }
+  .section-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-muted); margin-bottom: 8px; }
+  .preset-btn { display: block; width: 100%; text-align: left; background: var(--surface2); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: 5px; cursor: pointer; margin-bottom: 5px; font-size: 12px; transition: border-color 0.15s; }
+  .preset-btn:hover, .preset-btn.active { border-color: var(--accent); color: var(--accent2); }
+  .layer-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; cursor: pointer; }
+  .layer-dot { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+  .layer-row label { cursor: pointer; font-size: 12px; }
+  .conn-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; cursor: pointer; }
+  .conn-line { width: 18px; height: 2px; flex-shrink: 0; }
+  .conn-row label { cursor: pointer; font-size: 12px; }
+
+  /* Comments */
+  .comments-list { flex: 1; overflow-y: auto; padding: 8px 12px; }
+  .comment-item { background: var(--surface2); border: 1px solid var(--border); border-radius: 5px; padding: 8px; margin-bottom: 6px; position: relative; }
+  .comment-target { font-size: 10px; color: var(--accent2); font-weight: 600; margin-bottom: 3px; }
+  .comment-text { font-size: 11px; color: var(--text); line-height: 1.4; }
+  .comment-del { position: absolute; top: 6px; right: 6px; background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; line-height: 1; }
+  .comment-del:hover { color: #ef4444; }
+  .no-comments { color: var(--text-muted); font-size: 11px; padding: 4px 0; font-style: italic; }
+
+  /* SVG Canvas */
+  svg { width: 100%; height: 100%; display: block; }
+  .node-rect { cursor: pointer; transition: filter 0.15s; }
+  .node-rect:hover { filter: brightness(1.2); }
+  .node-label { font-family: system-ui, sans-serif; font-size: 11px; font-weight: 600; pointer-events: none; }
+  .node-sub { font-family: monospace; font-size: 9px; pointer-events: none; }
+  .node-badge { font-family: system-ui, sans-serif; font-size: 9px; font-weight: 700; pointer-events: none; }
+
+  /* Prompt output */
+  .prompt-out { flex: 1; font-family: monospace; font-size: 11px; background: var(--surface2); border: 1px solid var(--border); border-radius: 5px; padding: 8px 10px; color: var(--text); line-height: 1.5; overflow-y: auto; white-space: pre-wrap; }
+  .copy-btn { background: var(--accent); border: none; color: #fff; padding: 7px 14px; border-radius: 5px; cursor: pointer; font-size: 12px; font-weight: 600; white-space: nowrap; flex-shrink: 0; }
+  .copy-btn:hover { background: var(--accent2); }
+
+  /* Modal */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
+  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px; width: 360px; }
+  .modal h3 { font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+  .modal-sub { font-size: 10px; color: var(--text-muted); font-family: monospace; margin-bottom: 12px; }
+  .modal textarea { width: 100%; background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 5px; padding: 8px; font-family: system-ui, sans-serif; font-size: 12px; resize: vertical; min-height: 80px; outline: none; }
+  .modal textarea:focus { border-color: var(--accent); }
+  .modal-actions { display: flex; gap: 8px; margin-top: 10px; justify-content: flex-end; }
+  .modal-actions button { padding: 6px 14px; border-radius: 5px; font-size: 12px; cursor: pointer; border: 1px solid var(--border); }
+  .modal-save { background: var(--accent); color: #fff; border-color: var(--accent) !important; }
+  .modal-cancel { background: var(--surface2); color: var(--text); }
+  .hidden { display: none !important; }
+
+  /* Legend */
+  .legend { position: absolute; bottom: 12px; right: 12px; background: rgba(26,29,39,0.92); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 10px; color: var(--text-muted); }
+  .legend-row { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+  .legend-line { width: 18px; height: 2px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>PadSplit Digest — Architecture</h1>
+  <div class="zoom-btns">
+    <button onclick="zoom(1.2)">+</button>
+    <button onclick="zoom(0.83)">−</button>
+    <button onclick="resetZoom()">Reset</button>
+  </div>
+</div>
+
+<div class="app">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="section">
+      <div class="section-title">Presets</div>
+      <button class="preset-btn active" id="p-full" onclick="applyPreset('full')">Full System</button>
+      <button class="preset-btn" id="p-ingest" onclick="applyPreset('ingest')">Ingestion Flow</button>
+      <button class="preset-btn" id="p-classify" onclick="applyPreset('classify')">Classification</button>
+      <button class="preset-btn" id="p-data" onclick="applyPreset('data')">Data & State</button>
+      <button class="preset-btn" id="p-deploy" onclick="applyPreset('deploy')">Render & Deploy</button>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Layers</div>
+      <div class="layer-row" onclick="toggleLayer('entry')">
+        <input type="checkbox" id="l-entry" checked onchange="toggleLayer('entry')" onclick="event.stopPropagation()">
+        <div class="layer-dot" style="background:#f97316"></div>
+        <label for="l-entry">Entry / Orchestration</label>
+      </div>
+      <div class="layer-row" onclick="toggleLayer('type')">
+        <input type="checkbox" id="l-type" checked onchange="toggleLayer('type')" onclick="event.stopPropagation()">
+        <div class="layer-dot" style="background:#a78bfa"></div>
+        <label for="l-type">Types / Contracts</label>
+      </div>
+      <div class="layer-row" onclick="toggleLayer('data')">
+        <input type="checkbox" id="l-data" checked onchange="toggleLayer('data')" onclick="event.stopPropagation()">
+        <div class="layer-dot" style="background:#ec4899"></div>
+        <label for="l-data">Data / Persistence</label>
+      </div>
+      <div class="layer-row" onclick="toggleLayer('state')">
+        <input type="checkbox" id="l-state" checked onchange="toggleLayer('state')" onclick="event.stopPropagation()">
+        <div class="layer-dot" style="background:#10b981"></div>
+        <label for="l-state">State / Logic</label>
+      </div>
+      <div class="layer-row" onclick="toggleLayer('router')">
+        <input type="checkbox" id="l-router" checked onchange="toggleLayer('router')" onclick="event.stopPropagation()">
+        <div class="layer-dot" style="background:#f59e0b"></div>
+        <label for="l-router">Router / API</label>
+      </div>
+      <div class="layer-row" onclick="toggleLayer('render')">
+        <input type="checkbox" id="l-render" checked onchange="toggleLayer('render')" onclick="event.stopPropagation()">
+        <div class="layer-dot" style="background:#3b82f6"></div>
+        <label for="l-render">Render / Output</label>
+      </div>
+      <div class="layer-row" onclick="toggleLayer('infra')">
+        <input type="checkbox" id="l-infra" checked onchange="toggleLayer('infra')" onclick="event.stopPropagation()">
+        <div class="layer-dot" style="background:#6b7280"></div>
+        <label for="l-infra">Infrastructure</label>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Connections</div>
+      <div class="conn-row" onclick="toggleConn('flow')">
+        <input type="checkbox" id="c-flow" checked onchange="toggleConn('flow')" onclick="event.stopPropagation()">
+        <div class="conn-line" style="background:#3b82f6"></div>
+        <label for="c-flow">Data Flow</label>
+      </div>
+      <div class="conn-row" onclick="toggleConn('call')">
+        <input type="checkbox" id="c-call" checked onchange="toggleConn('call')" onclick="event.stopPropagation()">
+        <div class="conn-line" style="background:#10b981; border-top: 2px dashed #10b981; background: none; height: 0;"></div>
+        <label for="c-call">Function Call</label>
+      </div>
+      <div class="conn-row" onclick="toggleConn('dep')">
+        <input type="checkbox" id="c-dep" checked onchange="toggleConn('dep')" onclick="event.stopPropagation()">
+        <div class="conn-line" style="border-top: 2px dotted #6b7280; height: 0;"></div>
+        <label for="c-dep">Dependency</label>
+      </div>
+    </div>
+
+    <div class="section" style="border-bottom:none;">
+      <div class="section-title">Comments (<span id="comment-count">0</span>)</div>
+    </div>
+    <div class="comments-list" id="comments-list">
+      <div class="no-comments" id="no-comments">Click any node to add a comment.</div>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div class="main">
+    <div class="canvas-wrap" id="canvas-wrap">
+      <svg id="diagram" xmlns="http://www.w3.org/2000/svg"></svg>
+      <div class="legend">
+        <div class="legend-row"><div class="legend-line" style="background:#3b82f6"></div> Data Flow</div>
+        <div class="legend-row"><div class="legend-line" style="border-top:2px dashed #10b981;height:0"></div> Function Call</div>
+        <div class="legend-row"><div class="legend-line" style="border-top:2px dotted #6b7280;height:0"></div> Dependency</div>
+      </div>
+    </div>
+    <div class="bottom">
+      <div class="prompt-out" id="prompt-out"></div>
+      <button class="copy-btn" id="copy-btn" onclick="copyPrompt()">Copy Prompt</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay hidden" id="modal">
+  <div class="modal">
+    <h3 id="modal-title"></h3>
+    <div class="modal-sub" id="modal-sub"></div>
+    <textarea id="modal-input" placeholder="Add your note or question about this component…"></textarea>
+    <div class="modal-actions">
+      <button class="modal-cancel" onclick="closeModal()">Cancel</button>
+      <button class="modal-save" onclick="saveComment()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── State ───────────────────────────────────────────────────────────────────
+const state = {
+  scale: 1,
+  tx: 0,
+  ty: 0,
+  layers: { entry: true, type: true, data: true, state: true, router: true, render: true, infra: true },
+  conns: { flow: true, call: true, dep: true },
+  comments: [],
+  activeNode: null
+};
+
+// ─── Nodes ───────────────────────────────────────────────────────────────────
+// Layout: 7 horizontal bands (y ranges), nodes spaced within each band
+// Canvas logical size: 1100 x 860
+const NODES = [
+  // ENTRY (y ~30)
+  { id: 'index',      label: 'index.ts',        sub: 'Entry / Pipeline', layer: 'entry',  x: 420, y: 30,  w: 160, h: 50, desc: 'Main entry. Schedules cron, runs runPipeline(). Manages isPipelineRunning guard and lastDeployedAt throttle.' },
+
+  // ROUTER / API (y ~130)
+  { id: 'config',     label: 'config.ts',        sub: 'Env & Categories', layer: 'router', x: 80,  y: 130, w: 145, h: 50, desc: 'Reads env vars (PADSPLIT_COOKIE, OPENAI_API_KEY, etc.). Defines sender category patterns for digest grouping.' },
+  { id: 'api-client', label: 'api/client.ts',    sub: 'HTTP + GraphQL',   layer: 'router', x: 280, h: 50, y: 130, w: 145, desc: 'Cookie-authenticated HTTP client. Provides apiGet() and graphqlRequest(). Handles 401/403 auth errors.' },
+  { id: 'api-tickets',label: 'api/tickets.ts',   sub: 'REST Tickets',     layer: 'router', x: 480, y: 130, w: 145, h: 50, desc: 'Fetches maintenance tickets from /api/admin-new/property/maintenance/tickets/. Normalizes to InboxMessage[].' },
+  { id: 'api-msgs',   label: 'api/messages.ts',  sub: 'GraphQL (stub)',   layer: 'router', x: 680, y: 130, w: 145, h: 50, desc: 'GraphQL communications fetch — currently disabled/returns empty array pending schema alignment.' },
+  { id: 'honeywell',  label: 'scraper/honeywell.ts', sub: 'Thermostat',   layer: 'router', x: 880, y: 130, w: 145, h: 50, desc: 'Playwright-based Honeywell Total Connect scraper. Fetches thermostat readings. Not active in current digest flow.' },
+
+  // TYPE / CONTRACTS (y ~230)
+  { id: 'types',      label: 'Types / Interfaces', sub: '(inline in modules)', layer: 'type', x: 320, y: 230, w: 155, h: 50, desc: 'InboxMessage, DigestItem, Ticket, ThermostatReading, ClassificationResult — shared contracts across pipeline stages.' },
+
+  // STATE / LOGIC (y ~330)
+  { id: 'classifier', label: 'classifier/index.ts', sub: 'Orchestrator',  layer: 'state', x: 240, y: 330, w: 155, h: 50, desc: 'Loads pending items, runs rules-first classification, falls back to LLM if confidence < 0.7. Updates DB.' },
+  { id: 'rules',      label: 'classifier/rules.ts', sub: 'Keyword Rules', layer: 'state', x: 420, y: 330, w: 155, h: 50, desc: 'Deterministic intent detection: maintenance, money, move_in, move_out, gratitude. Confidence = 0.3 + (matches×0.1).' },
+  { id: 'llm',        label: 'classifier/llm.ts',   sub: 'OpenAI Fallback', layer: 'state', x: 600, y: 330, w: 155, h: 50, desc: 'gpt-4o-mini classification when rules return unknown or conf < 0.7. Returns intent+confidence+reason JSON.' },
+
+  // DATA / PERSISTENCE (y ~440)
+  { id: 'db-init',    label: 'db/init.ts',       sub: 'SQLite Schema',    layer: 'data',  x: 200, y: 440, w: 145, h: 50, desc: 'Opens SQLite (WAL mode). Creates digest_items and digests tables with 4 indexes on first run.' },
+  { id: 'db-items',   label: 'db/items.ts',       sub: 'CRUD Operations', layer: 'data',  x: 400, y: 440, w: 145, h: 50, desc: 'insertItem (dedup by external_id), getPendingItems, updateItemClassification, markItemsSent, getVisibleClassifiedItems.' },
+  { id: 'db-file',    label: 'padsplit-digest.sqlite', sub: 'Database File', layer: 'data', x: 600, y: 440, w: 155, h: 50, desc: 'SQLite file on disk. digest_items table tracks all ingested messages + classifications. digests table tracks runs.' },
+
+  // RENDER / OUTPUT (y ~550)
+  { id: 'builder',    label: 'digest/builder.ts', sub: 'HTML Generator',  layer: 'render', x: 280, y: 550, w: 155, h: 50, desc: 'Groups items by sender category. Builds responsive HTML digest with urgency highlighting. SHA256 dedup check.' },
+  { id: 'out-html',   label: 'out/digest-*.html', sub: 'Generated File',  layer: 'render', x: 500, y: 550, w: 155, h: 50, desc: 'Output HTML digests. Max 500 files retained. Named digest-YYYYMMDD-HHMMSS.html.' },
+
+  // INFRASTRUCTURE (y ~660)
+  { id: 'publish',    label: 'deploy/publish.ts', sub: 'Firebase Publisher', layer: 'infra', x: 200, y: 660, w: 155, h: 50, desc: 'Copies digest to public/index.html (latest) and public/archives/. Generates history.html listing 500 archives.' },
+  { id: 'firebase',   label: 'Firebase Hosting',  sub: 'Cloud Deploy',    layer: 'infra', x: 420, y: 660, w: 145, h: 50, desc: 'Runs firebase deploy --only hosting. Throttled: max once per 30 minutes via lastDeployedAt guard.' },
+  { id: 'logger',     label: 'utils/logger.ts',   sub: 'Structured Logs', layer: 'infra', x: 630, y: 660, w: 145, h: 50, desc: 'Structured JSON logs to stdout/stderr with level, message, timestamp, and context object.' },
+  { id: 'retry',      label: 'utils/retry.ts',    sub: 'Retry / Backoff', layer: 'infra', x: 830, y: 660, w: 145, h: 50, desc: 'Exponential backoff: base 1s, max 30s, default 3 attempts. Used by LLM calls and DB operations.' },
+];
+
+const LAYER_COLORS = {
+  entry:  { fill: '#431407', stroke: '#f97316', text: '#fed7aa' },
+  type:   { fill: '#2e1065', stroke: '#a78bfa', text: '#ede9fe' },
+  data:   { fill: '#500724', stroke: '#ec4899', text: '#fce7f3' },
+  state:  { fill: '#052e16', stroke: '#10b981', text: '#d1fae5' },
+  router: { fill: '#451a03', stroke: '#f59e0b', text: '#fef3c7' },
+  render: { fill: '#1e3a5f', stroke: '#3b82f6', text: '#dbeafe' },
+  infra:  { fill: '#1c1c1e', stroke: '#6b7280', text: '#e5e7eb' },
+};
+
+const CONN_STYLES = {
+  flow: { color: '#3b82f6', dash: '',    label: '' },
+  call: { color: '#10b981', dash: '6,3', label: '' },
+  dep:  { color: '#6b7280', dash: '2,4', label: '' },
+};
+
+// ─── Connections ──────────────────────────────────────────────────────────────
+const CONNECTIONS = [
+  // Entry → Router
+  { from: 'index', to: 'api-tickets', type: 'call', label: 'fetchTickets()' },
+  { from: 'index', to: 'api-msgs',    type: 'call', label: 'fetchMessages()' },
+  { from: 'index', to: 'classifier',  type: 'call', label: 'classify()' },
+  { from: 'index', to: 'builder',     type: 'call', label: 'buildDigest()' },
+  { from: 'index', to: 'publish',     type: 'call', label: 'publish()' },
+  { from: 'index', to: 'config',      type: 'dep',  label: '' },
+
+  // Router → Type
+  { from: 'api-tickets', to: 'types',     type: 'flow', label: 'InboxMessage[]' },
+  { from: 'api-msgs',    to: 'types',     type: 'flow', label: 'InboxMessage[]' },
+  { from: 'api-tickets', to: 'api-client',type: 'dep',  label: '' },
+  { from: 'api-msgs',    to: 'api-client',type: 'dep',  label: '' },
+
+  // Router → Data
+  { from: 'index',       to: 'db-items',  type: 'call', label: 'insertItem()' },
+
+  // Types → State
+  { from: 'types',       to: 'classifier', type: 'dep', label: '' },
+
+  // State → State
+  { from: 'classifier',  to: 'rules',     type: 'call', label: 'detectIntent()' },
+  { from: 'classifier',  to: 'llm',       type: 'call', label: 'fallback' },
+
+  // State → Data
+  { from: 'classifier',  to: 'db-items',  type: 'call', label: 'updateClassification()' },
+  { from: 'classifier',  to: 'db-items',  type: 'flow', label: 'pending items' },
+
+  // Data internal
+  { from: 'db-init',     to: 'db-file',   type: 'flow', label: 'creates' },
+  { from: 'db-items',    to: 'db-file',   type: 'flow', label: 'read/write' },
+
+  // Data → Render
+  { from: 'db-items',    to: 'builder',   type: 'flow', label: 'classified items' },
+
+  // Render → Render
+  { from: 'builder',     to: 'out-html',  type: 'flow', label: 'writes' },
+
+  // Render → Infra
+  { from: 'out-html',    to: 'publish',   type: 'flow', label: 'reads' },
+  { from: 'publish',     to: 'firebase',  type: 'call', label: 'firebase deploy' },
+
+  // Infra deps
+  { from: 'index',       to: 'logger',    type: 'dep',  label: '' },
+  { from: 'llm',         to: 'retry',     type: 'dep',  label: '' },
+];
+
+// ─── Render ───────────────────────────────────────────────────────────────────
+let svgEl, defs, viewW = 1080, viewH = 780;
+
+function init() {
+  svgEl = document.getElementById('diagram');
+  renderDiagram();
+  updatePrompt();
+}
+
+function renderDiagram() {
+  svgEl.innerHTML = '';
+  svgEl.setAttribute('viewBox', `${-state.tx} ${-state.ty} ${viewW / state.scale} ${viewH / state.scale}`);
+
+  // Defs for arrowheads
+  const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+  ['flow','call','dep'].forEach(type => {
+    const c = CONN_STYLES[type].color;
+    const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+    marker.setAttribute('id', `arrow-${type}`);
+    marker.setAttribute('markerWidth', '8');
+    marker.setAttribute('markerHeight', '6');
+    marker.setAttribute('refX', '7');
+    marker.setAttribute('refY', '3');
+    marker.setAttribute('orient', 'auto');
+    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+    poly.setAttribute('points', '0 0, 8 3, 0 6');
+    poly.setAttribute('fill', c);
+    marker.appendChild(poly);
+    defs.appendChild(marker);
+  });
+  svgEl.appendChild(defs);
+
+  const visibleIds = new Set(
+    NODES.filter(n => state.layers[n.layer]).map(n => n.id)
+  );
+
+  // Connections
+  CONNECTIONS.forEach(c => {
+    if (!state.conns[c.type]) return;
+    if (!visibleIds.has(c.from) || !visibleIds.has(c.to)) return;
+    drawConnection(c, visibleIds);
+  });
+
+  // Nodes
+  NODES.forEach(n => {
+    if (!state.layers[n.layer]) return;
+    drawNode(n);
+  });
+
+  updatePrompt();
+}
+
+function nodeCenter(id) {
+  const n = NODES.find(x => x.id === id);
+  if (!n) return null;
+  return { x: n.x + n.w / 2, y: n.y + n.h / 2 };
+}
+
+function drawConnection(c) {
+  const s = CONN_STYLES[c.type];
+  const fn = NODES.find(n => n.id === c.from);
+  const tn = NODES.find(n => n.id === c.to);
+  if (!fn || !tn) return;
+
+  const x1 = fn.x + fn.w / 2, y1 = fn.y + fn.h;
+  const x2 = tn.x + tn.w / 2, y2 = tn.y;
+  const cy1 = y1 + (y2 - y1) * 0.5;
+  const cy2 = y1 + (y2 - y1) * 0.5;
+
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', `M ${x1} ${y1} C ${x1} ${cy1}, ${x2} ${cy2}, ${x2} ${y2}`);
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', s.color);
+  path.setAttribute('stroke-width', '1.5');
+  path.setAttribute('opacity', '0.5');
+  if (s.dash) path.setAttribute('stroke-dasharray', s.dash);
+  path.setAttribute('marker-end', `url(#arrow-${c.type})`);
+  svgEl.appendChild(path);
+
+  if (c.label) {
+    const mx = (x1 + x2) / 2;
+    const my = (y1 + y2) / 2;
+    const txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    txt.setAttribute('x', mx + 4);
+    txt.setAttribute('y', my);
+    txt.setAttribute('font-family', 'monospace');
+    txt.setAttribute('font-size', '8');
+    txt.setAttribute('fill', s.color);
+    txt.setAttribute('opacity', '0.8');
+    txt.textContent = c.label;
+    svgEl.appendChild(txt);
+  }
+}
+
+function drawNode(n) {
+  const col = LAYER_COLORS[n.layer];
+  const hasComment = state.comments.some(c => c.target === n.id);
+  const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  g.setAttribute('class', 'node-group');
+  g.style.cursor = 'pointer';
+  g.addEventListener('click', () => openModal(n));
+
+  const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  rect.setAttribute('x', n.x); rect.setAttribute('y', n.y);
+  rect.setAttribute('width', n.w); rect.setAttribute('height', n.h);
+  rect.setAttribute('rx', '6'); rect.setAttribute('ry', '6');
+  rect.setAttribute('fill', col.fill);
+  rect.setAttribute('stroke', hasComment ? '#fbbf24' : col.stroke);
+  rect.setAttribute('stroke-width', hasComment ? '2.5' : '1.5');
+  rect.setAttribute('class', 'node-rect');
+  g.appendChild(rect);
+
+  const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  label.setAttribute('x', n.x + n.w / 2); label.setAttribute('y', n.y + 18);
+  label.setAttribute('text-anchor', 'middle');
+  label.setAttribute('fill', col.text);
+  label.setAttribute('class', 'node-label');
+  label.textContent = n.label;
+  g.appendChild(label);
+
+  const sub = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  sub.setAttribute('x', n.x + n.w / 2); sub.setAttribute('y', n.y + 32);
+  sub.setAttribute('text-anchor', 'middle');
+  sub.setAttribute('fill', col.stroke);
+  sub.setAttribute('class', 'node-sub');
+  sub.textContent = n.sub;
+  g.appendChild(sub);
+
+  // Layer badge top-left
+  const badge = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  badge.setAttribute('x', n.x + 5); badge.setAttribute('y', n.y + 9);
+  badge.setAttribute('fill', col.stroke);
+  badge.setAttribute('class', 'node-badge');
+  badge.setAttribute('opacity', '0.6');
+  badge.textContent = n.layer.toUpperCase()[0];
+  g.appendChild(badge);
+
+  if (hasComment) {
+    const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    dot.setAttribute('cx', n.x + n.w - 7); dot.setAttribute('cy', n.y + 7);
+    dot.setAttribute('r', '5');
+    dot.setAttribute('fill', '#fbbf24');
+    g.appendChild(dot);
+  }
+
+  svgEl.appendChild(g);
+}
+
+// ─── Zoom ─────────────────────────────────────────────────────────────────────
+function zoom(factor) {
+  state.scale = Math.max(0.3, Math.min(3, state.scale * factor));
+  renderDiagram();
+}
+function resetZoom() {
+  state.scale = 1; state.tx = 0; state.ty = 0;
+  renderDiagram();
+}
+
+// ─── Filters ──────────────────────────────────────────────────────────────────
+function toggleLayer(layer) {
+  const cb = document.getElementById('l-' + layer);
+  state.layers[layer] = cb.checked;
+  renderDiagram();
+}
+function toggleConn(conn) {
+  const cb = document.getElementById('c-' + conn);
+  state.conns[conn] = cb.checked;
+  renderDiagram();
+}
+
+// ─── Presets ──────────────────────────────────────────────────────────────────
+const PRESETS = {
+  full:     { layers: { entry:true, type:true, data:true, state:true, router:true, render:true, infra:true }, conns: { flow:true, call:true, dep:true } },
+  ingest:   { layers: { entry:true, type:true, data:true, state:false, router:true, render:false, infra:false }, conns: { flow:true, call:true, dep:false } },
+  classify: { layers: { entry:false, type:true, data:true, state:true, router:false, render:false, infra:true }, conns: { flow:true, call:true, dep:true } },
+  data:     { layers: { entry:false, type:true, data:true, state:true, router:false, render:false, infra:false }, conns: { flow:true, call:true, dep:false } },
+  deploy:   { layers: { entry:true, type:false, data:false, state:false, router:false, render:true, infra:true }, conns: { flow:true, call:true, dep:false } },
+};
+
+function applyPreset(name) {
+  const p = PRESETS[name];
+  Object.assign(state.layers, p.layers);
+  Object.assign(state.conns, p.conns);
+  Object.keys(state.layers).forEach(k => { document.getElementById('l-'+k).checked = state.layers[k]; });
+  Object.keys(state.conns).forEach(k => { document.getElementById('c-'+k).checked = state.conns[k]; });
+  document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('p-'+name).classList.add('active');
+  resetZoom();
+}
+
+// ─── Modal / Comments ─────────────────────────────────────────────────────────
+function openModal(node) {
+  state.activeNode = node;
+  document.getElementById('modal-title').textContent = node.label;
+  document.getElementById('modal-sub').textContent = node.desc;
+  const existing = state.comments.find(c => c.target === node.id);
+  document.getElementById('modal-input').value = existing ? existing.text : '';
+  document.getElementById('modal').classList.remove('hidden');
+  setTimeout(() => document.getElementById('modal-input').focus(), 50);
+}
+
+function closeModal() {
+  document.getElementById('modal').classList.add('hidden');
+  state.activeNode = null;
+}
+
+function saveComment() {
+  const text = document.getElementById('modal-input').value.trim();
+  if (!text) { closeModal(); return; }
+  const node = state.activeNode;
+  const existing = state.comments.findIndex(c => c.target === node.id);
+  if (existing >= 0) {
+    state.comments[existing].text = text;
+  } else {
+    state.comments.push({ id: Date.now(), target: node.id, label: node.label, file: node.sub, text });
+  }
+  closeModal();
+  renderDiagram();
+  renderComments();
+  updatePrompt();
+}
+
+function deleteComment(id) {
+  state.comments = state.comments.filter(c => c.id !== id);
+  renderDiagram();
+  renderComments();
+  updatePrompt();
+}
+
+function renderComments() {
+  const list = document.getElementById('comments-list');
+  document.getElementById('comment-count').textContent = state.comments.length;
+  if (state.comments.length === 0) {
+    list.innerHTML = '<div class="no-comments" id="no-comments">Click any node to add a comment.</div>';
+    return;
+  }
+  list.innerHTML = state.comments.map(c => `
+    <div class="comment-item">
+      <button class="comment-del" onclick="deleteComment(${c.id})">×</button>
+      <div class="comment-target">${c.label}</div>
+      <div class="comment-text">${c.text}</div>
+    </div>
+  `).join('');
+}
+
+// ─── Prompt ───────────────────────────────────────────────────────────────────
+const LAYER_NAMES = { entry:'Entry/Orchestration', type:'Types/Contracts', data:'Data/Persistence', state:'State/Logic', router:'Router/API', render:'Render/Output', infra:'Infrastructure' };
+
+function updatePrompt() {
+  const visibleLayers = Object.keys(state.layers).filter(k => state.layers[k]).map(k => LAYER_NAMES[k]);
+  const allVisible = visibleLayers.length === 7;
+  let text = `This is the PadSplit Digest architecture`;
+  if (!allVisible) text += `, showing: ${visibleLayers.join(', ')}`;
+  text += `.\n\nThe system ingests PadSplit maintenance tickets via REST API, classifies them (rules-first, OpenAI fallback), stores them in SQLite, and generates HTML digest reports deployed to Firebase Hosting.`;
+
+  if (state.comments.length > 0) {
+    text += `\n\nFeedback on specific components:\n`;
+    state.comments.forEach(c => {
+      text += `\n**${c.label}** (${c.file}):\n${c.text}\n`;
+    });
+  } else {
+    text += `\n\n[Click any node to add feedback or questions about that component.]`;
+  }
+  document.getElementById('prompt-out').textContent = text;
+}
+
+function copyPrompt() {
+  navigator.clipboard.writeText(document.getElementById('prompt-out').textContent);
+  const btn = document.getElementById('copy-btn');
+  btn.textContent = 'Copied!';
+  setTimeout(() => btn.textContent = 'Copy Prompt', 1500);
+}
+
+// Keyboard dismiss modal
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeModal();
+  if (e.key === 'Enter' && e.metaKey && !document.getElementById('modal').classList.contains('hidden')) saveComment();
+});
+
+// Click backdrop to close
+document.getElementById('modal').addEventListener('click', e => { if (e.target === document.getElementById('modal')) closeModal(); });
+
+init();
+</script>
+</body>
+</html>

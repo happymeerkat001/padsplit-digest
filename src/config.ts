@@ -1,18 +1,20 @@
-import 'dotenv/config';
-import { existsSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+// Purpose: categorizes messages based on sender names (control), call in config by resolveSenderCategory function, used for categorizing messages in the digest based on sender patterns, and provides main configuration settings for the application, including API keys, URLs, scheduling, and database configuration, with a function to validate critical configuration at startup to ensure necessary settings are in place for proper functionality using dependencies like dotenv for environment variable management and node:fs and node:path for file system operations related to database setup.
+
+import 'dotenv/config'; // Run On-  process.env 
+import { existsSync, mkdirSync } from 'node:fs'; // Run On - node: infrastructure 
+import { dirname } from 'node:path'; // Run On - node: infrastructure
 
 function optional(name: string, defaultValue: string): string {
   return process.env[name] ?? defaultValue;
 }
 
-export interface SenderCategory {
+export interface SenderCategory { // know as- Durable 
   key: string;
   label: string;
   senders: string[];
 }
 
-export const SENDER_CATEGORIES: SenderCategory[] = [
+export const SENDER_CATEGORIES: SenderCategory[] = [ // call in- named const, module
   {
     key: 'support',
     label: 'Support',
@@ -40,8 +42,8 @@ export const SENDER_CATEGORIES: SenderCategory[] = [
   },
 ];
 
-export function resolveSenderCategory(senderName: string): string {
-  const normalized = senderName.toLowerCase().trim();
+export function resolveSenderCategory(senderName: string): string { // run for-Domain logic. control- categorizes sender name into predefined categories based on patterns, with a default categorization for member messages and others, used to classify messages in the digest based on who sent them, enabling better organization and filtering of messages for the end-users.
+  const normalized = senderName.toLowerCase().trim(); // stack- memread- normalize sender name for matching - control
 
   for (const category of SENDER_CATEGORIES) {
     if (category.key === 'member_messages' || category.key === 'others') {
@@ -49,7 +51,7 @@ export function resolveSenderCategory(senderName: string): string {
     }
 
     if (category.senders.some((pattern) => normalized.includes(pattern))) {
-      return category.key;
+      return category.key; // return-control (string as data)
     }
   }
 
@@ -57,16 +59,16 @@ export function resolveSenderCategory(senderName: string): string {
     return 'member_messages';
   }
 
-  return 'others';
+  return 'others'; // Return-Control (guard/default)
 }
 
-const dbPath = optional('DB_PATH', './data/padsplit-digest.sqlite');
-const dbDir = dirname(dbPath);
-if (!existsSync(dbDir)) {
-  mkdirSync(dbDir, { recursive: true });
+const dbPath = optional('DB_PATH', './data/padsplit-digest.sqlite'); // config- database file path, defaulting to ./data/padsplit-digest.sqlite, can be overridden with DB_PATH environment variable, used for storing classified items and other data related to the digest
+const dbDir = dirname(dbPath); // derived directory from dbPath, used to ensure the directory exists before trying to create the database file, preventing errors when the application starts and tries to access the database
+if (!existsSync(dbDir)) {  //crosses to disk to check if the directory for the database file exists
+  mkdirSync(dbDir, { recursive: true }); // memwrite- sustain - creates directory so environment is in valid state to run
 }
 
-export const config = {
+export const config = { // call in config, main configuration object for the application, containing settings for OpenAI API, sender categories, PadSplit API, Honeywell integration, scheduling, digest parameters, and database configuration, all of which can be customized through environment variables or default values. durable memory for configuration settings that are used across the application, ensuring consistent access to critical parameters and enabling easy updates through environment variables without changing the codebase.
   openai: {
     apiKey: optional('OPENAI_API_KEY', ''),
     model: 'gpt-4o-mini',
@@ -103,7 +105,7 @@ export const config = {
   },
 };
 
-export function validateConfig(): string[] {
+export function validateConfig(): string[] { // run for- no input, Out- string array. Control-returns warnings to caller 
   const warnings: string[] = [];
 
   if (!config.padsplit.cookie) {
@@ -114,5 +116,5 @@ export function validateConfig(): string[] {
     warnings.push('OPENAI_API_KEY is not set (LLM fallback disabled)');
   }
 
-  return warnings;
+  return warnings; 
 }

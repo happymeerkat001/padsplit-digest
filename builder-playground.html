@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>builder.ts — Architecture Playground</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0f1117;--panel:#181a20;--border:#2a2d36;--text:#d1d5db;
+  --muted:#6b7280;--accent:#60a5fa;--green:#34d399;--amber:#fbbf24;
+  --red:#f87171;--purple:#a78bfa;--pink:#f472b6;--cyan:#22d3ee;
+  --node-r:10;
+}
+body{background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif;font-size:14px;overflow:hidden;height:100vh}
+.layout{display:grid;grid-template-columns:260px 1fr;grid-template-rows:1fr auto;height:100vh}
+.sidebar{grid-row:1/3;background:var(--panel);border-right:1px solid var(--border);overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:16px}
+.canvas-wrap{position:relative;overflow:hidden;background:var(--bg)}
+.prompt-area{grid-column:2;background:var(--panel);border-top:1px solid var(--border);padding:12px 16px;display:flex;gap:12px;align-items:flex-start;max-height:180px}
+.prompt-area pre{flex:1;white-space:pre-wrap;font-family:'SF Mono',SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--muted);overflow-y:auto;max-height:156px;line-height:1.5}
+.copy-btn{background:var(--accent);color:#000;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-weight:600;font-size:12px;white-space:nowrap}
+.copy-btn:hover{opacity:.85}
+.copy-btn.copied{background:var(--green)}
+
+h3{font-size:13px;font-weight:700;color:var(--text);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px}
+.sidebar-title{font-size:16px;font-weight:800;color:var(--accent);text-transform:none;letter-spacing:0;margin-bottom:4px}
+.sidebar-sub{font-size:11px;color:var(--muted);margin-bottom:8px}
+
+.preset-group{display:flex;flex-wrap:wrap;gap:6px}
+.preset-btn{background:var(--border);color:var(--text);border:1px solid transparent;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px;transition:all .15s}
+.preset-btn:hover{border-color:var(--accent)}
+.preset-btn.active{background:var(--accent);color:#000;font-weight:600}
+
+.layer-toggle{display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer;font-size:13px}
+.layer-toggle input{display:none}
+.layer-swatch{width:14px;height:14px;border-radius:4px;border:2px solid transparent;transition:all .15s}
+.layer-toggle input:checked+.layer-swatch{border-color:#fff}
+.layer-toggle input:not(:checked)+.layer-swatch{opacity:.35}
+.layer-toggle input:not(:checked)~.layer-label{opacity:.4}
+
+.conn-toggle{display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer;font-size:13px}
+.conn-toggle input{display:none}
+.conn-line{width:20px;height:2px;border-radius:1px;transition:opacity .15s}
+.conn-toggle input:not(:checked)+.conn-line{opacity:.25}
+.conn-toggle input:not(:checked)~.conn-label{opacity:.4}
+
+.comments-list{display:flex;flex-direction:column;gap:6px;flex:1;overflow-y:auto;min-height:0}
+.comment-card{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:12px}
+.comment-card .target{font-weight:700;color:var(--accent);margin-bottom:2px}
+.comment-card .file{color:var(--muted);font-size:11px;font-family:monospace}
+.comment-card .body{margin-top:4px;color:var(--text)}
+.comment-card .del{color:var(--red);cursor:pointer;float:right;font-size:11px}
+.no-comments{color:var(--muted);font-size:12px;font-style:italic}
+
+/* modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:100}
+.modal-overlay.open{display:flex}
+.modal{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;width:380px;max-width:90vw}
+.modal h4{margin-bottom:4px;color:var(--accent)}
+.modal .file{color:var(--muted);font-size:11px;font-family:monospace;margin-bottom:10px}
+.modal textarea{width:100%;height:80px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:8px;font-family:system-ui;font-size:13px;resize:vertical}
+.modal-actions{display:flex;gap:8px;margin-top:10px;justify-content:flex-end}
+.modal-actions button{padding:6px 14px;border-radius:6px;border:none;cursor:pointer;font-size:12px;font-weight:600}
+.btn-cancel{background:var(--border);color:var(--text)}
+.btn-save{background:var(--accent);color:#000}
+
+/* zoom controls */
+.zoom-controls{position:absolute;bottom:12px;right:12px;display:flex;gap:4px;z-index:10}
+.zoom-btn{background:var(--panel);border:1px solid var(--border);color:var(--text);width:30px;height:30px;border-radius:6px;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center}
+.zoom-btn:hover{border-color:var(--accent)}
+
+/* SVG styles */
+svg text{font-family:system-ui,-apple-system,sans-serif}
+.node-group{cursor:pointer}
+.node-group:hover rect{filter:brightness(1.15)}
+.node-commented rect{stroke-width:2.5;stroke:var(--amber)}
+</style>
+</head>
+<body>
+
+<div class="layout">
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div>
+      <div class="sidebar-title">builder.ts</div>
+      <div class="sidebar-sub">Digest orchestration architecture</div>
+    </div>
+
+    <div>
+      <h3>View Presets</h3>
+      <div class="preset-group" id="presets"></div>
+    </div>
+
+    <div>
+      <h3>Layers</h3>
+      <div id="layer-toggles"></div>
+    </div>
+
+    <div>
+      <h3>Connections</h3>
+      <div id="conn-toggles"></div>
+    </div>
+
+    <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+      <h3>Comments (<span id="comment-count">0</span>)</h3>
+      <div class="comments-list" id="comments-list">
+        <div class="no-comments">Click a node to add feedback</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CANVAS -->
+  <div class="canvas-wrap" id="canvas-wrap">
+    <svg id="diagram" width="100%" height="100%"></svg>
+    <div class="zoom-controls">
+      <button class="zoom-btn" onclick="zoomIn()">+</button>
+      <button class="zoom-btn" onclick="zoomOut()">&minus;</button>
+      <button class="zoom-btn" onclick="zoomReset()" style="font-size:11px">1:1</button>
+    </div>
+  </div>
+
+  <!-- PROMPT -->
+  <div class="prompt-area">
+    <pre id="prompt-output">Adjust layers and add comments to generate a prompt.</pre>
+    <button class="copy-btn" id="copy-btn" onclick="copyPrompt()">Copy</button>
+  </div>
+</div>
+
+<!-- COMMENT MODAL -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <h4 id="modal-title"></h4>
+    <div class="file" id="modal-file"></div>
+    <textarea id="modal-text" placeholder="Add your feedback or suggestion..."></textarea>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+      <button class="btn-save" onclick="saveComment()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ──────────────────────────────────────
+// DATA MODEL
+// ──────────────────────────────────────
+
+const LAYERS = [
+  { id: 'input',       label: 'Input',       color: '#3b82f6', fill: '#1e3a5f' },
+  { id: 'computation', label: 'Computation',  color: '#a78bfa', fill: '#2d2155' },
+  { id: 'output',      label: 'Output',       color: '#34d399', fill: '#1a3d2e' },
+  { id: 'orchestrator',label: 'Orchestrator', color: '#fbbf24', fill: '#3d3215' },
+];
+
+const CONN_TYPES = [
+  { id: 'data-flow',  label: 'Data Flow',  color: '#3b82f6', dash: '' },
+  { id: 'transform',  label: 'Transform',  color: '#a78bfa', dash: '6,3' },
+  { id: 'write',      label: 'Write/Send', color: '#34d399', dash: '4,4' },
+  { id: 'orchestrate', label: 'Orchestration', color: '#fbbf24', dash: '8,4' },
+];
+
+const NODES = [
+  // Input layer (y ~60)
+  { id: 'config',         label: 'config',                subtitle: 'src/config.ts',             x: 80,  y: 60,  w: 150, h: 50, layer: 'input',
+    detail: 'Environment config: sender categories, Gmail, schedule, DB path, runtime flags' },
+  { id: 'db-read',        label: 'getVisibleClassifiedItems', subtitle: 'src/db/items.ts',       x: 290, y: 60,  w: 210, h: 50, layer: 'input',
+    detail: 'Reads classified email items from SQLite within the visibility window (48h default)' },
+  { id: 'thermostat',     label: 'ThermostatReading[]',   subtitle: 'src/scraper/honeywell.ts',  x: 560, y: 60,  w: 180, h: 50, layer: 'input',
+    detail: 'Thermostat readings from Honeywell API: name, currentTemp, setpoint, mode' },
+  { id: 'clock',          label: 'new Date()',            subtitle: 'system clock',               x: 790, y: 60,  w: 130, h: 50, layer: 'input',
+    detail: 'Current timestamp for report generation, file naming, and digest metadata' },
+  { id: 'argv',           label: 'process.argv',          subtitle: 'CLI arguments',             x: 970, y: 60,  w: 140, h: 50, layer: 'input',
+    detail: '--send-email flag controls whether digest email is actually sent' },
+
+  // Computation layer (y ~210)
+  { id: 'group-by',       label: 'groupBySenderCategory', subtitle: 'pure function',             x: 100, y: 210, w: 210, h: 50, layer: 'computation',
+    detail: 'Groups DigestItem[] into SenderGroup[] by matching sender emails to config categories (support, maintenance, no-reply, member messages, others)' },
+  { id: 'escape-html',    label: 'escapeHtml',            subtitle: 'pure function',             x: 370, y: 210, w: 130, h: 50, layer: 'computation',
+    detail: 'Sanitizes strings for HTML output: &, <, >, \", \' → HTML entities' },
+  { id: 'render-items',   label: 'renderItems',           subtitle: 'pure function',             x: 555, y: 210, w: 140, h: 50, layer: 'computation',
+    detail: 'Renders a SenderGroup into an HTML <table> with subject, sender, intent, urgency, received columns' },
+  { id: 'render-thermo',  label: 'renderThermostatSection', subtitle: 'pure function',           x: 750, y: 210, w: 200, h: 50, layer: 'computation',
+    detail: 'Renders thermostat readings as an HTML <ul> section with name, temps, mode' },
+  { id: 'build-html',     label: 'buildDigestHtml',       subtitle: 'pure function',             x: 380, y: 310, w: 170, h: 50, layer: 'computation',
+    detail: 'Assembles the full HTML document: header (date, counts) + sender sections + thermostat section + CSS styling' },
+  { id: 'build-summary',  label: 'buildEmailSummary',     subtitle: 'pure function',             x: 700, y: 310, w: 170, h: 50, layer: 'computation',
+    detail: 'Builds plain text email body with report path and per-category item counts' },
+  { id: 'format-ts',      label: 'formatTimestampForFile', subtitle: 'pure function',            x: 100, y: 310, w: 195, h: 50, layer: 'computation',
+    detail: 'Formats Date → "YYYYMMDD-HHmmss" string for output file naming' },
+
+  // Output layer (y ~460)
+  { id: 'write-report',   label: 'writeDigestReport',     subtitle: 'out/digest-*.html',         x: 80,  y: 460, w: 175, h: 50, layer: 'output',
+    detail: 'Writes HTML to filesystem: mkdirSync(out/) + writeFileSync(digest-{timestamp}.html)' },
+  { id: 'create-digest',  label: 'createDigest',          subtitle: 'src/db/items.ts',           x: 310, y: 460, w: 155, h: 50, layer: 'output',
+    detail: 'Inserts digest record into SQLite: sent_at, item_count, urgent_count, recipient, status' },
+  { id: 'mark-sent',      label: 'markItemsSent',         subtitle: 'src/db/items.ts',           x: 520, y: 460, w: 155, h: 50, layer: 'output',
+    detail: 'Updates items in DB: sets digest_id and digest_sent_at to link items to their digest' },
+  { id: 'send-email',     label: 'sendDigestEmail',       subtitle: 'src/gmail/send.ts',         x: 730, y: 460, w: 160, h: 50, layer: 'output',
+    detail: 'Sends digest via Gmail API (conditional: requires --send-email + ENABLE_EMAIL_SENDING=true)' },
+  { id: 'logger',         label: 'logger.info',           subtitle: 'src/utils/logger.ts',       x: 950, y: 460, w: 130, h: 50, layer: 'output',
+    detail: 'Structured logging: report path, item count, thermostat count, digest ID, send status' },
+
+  // Orchestrator (y ~380)
+  { id: 'orchestrator',   label: 'buildAndSendDigest',    subtitle: 'src/digest/builder.ts:384', x: 420, y: 385, w: 210, h: 55, layer: 'orchestrator',
+    detail: 'Main exported async function. Coordinates: read items → group → render HTML → write file → DB records → conditional email → return {sent, itemCount, reportPath}' },
+];
+
+const CONNECTIONS = [
+  // Input → Orchestrator
+  { from: 'config',      to: 'orchestrator', type: 'data-flow',   label: 'settings' },
+  { from: 'db-read',     to: 'orchestrator', type: 'data-flow',   label: 'DigestItem[]' },
+  { from: 'thermostat',  to: 'orchestrator', type: 'data-flow',   label: 'readings' },
+  { from: 'clock',       to: 'orchestrator', type: 'data-flow',   label: 'now' },
+  { from: 'argv',        to: 'orchestrator', type: 'data-flow',   label: '--send-email' },
+
+  // Orchestrator → Computation
+  { from: 'orchestrator', to: 'group-by',      type: 'orchestrate', label: 'items' },
+  { from: 'orchestrator', to: 'build-html',    type: 'orchestrate', label: 'groups+readings' },
+  { from: 'orchestrator', to: 'build-summary', type: 'orchestrate', label: 'groups' },
+
+  // Computation internal
+  { from: 'group-by',     to: 'build-html',    type: 'transform',  label: 'SenderGroup[]' },
+  { from: 'escape-html',  to: 'render-items',  type: 'transform',  label: 'safe strings' },
+  { from: 'escape-html',  to: 'render-thermo', type: 'transform',  label: 'safe strings' },
+  { from: 'render-items', to: 'build-html',    type: 'transform',  label: 'table HTML' },
+  { from: 'render-thermo',to: 'build-html',    type: 'transform',  label: 'section HTML' },
+  { from: 'format-ts',    to: 'write-report',  type: 'transform',  label: 'filename' },
+
+  // Orchestrator → Output
+  { from: 'orchestrator', to: 'write-report',  type: 'orchestrate', label: 'html' },
+  { from: 'orchestrator', to: 'create-digest', type: 'orchestrate', label: 'metadata' },
+  { from: 'orchestrator', to: 'mark-sent',     type: 'orchestrate', label: 'itemIds' },
+  { from: 'orchestrator', to: 'send-email',    type: 'orchestrate', label: 'subject+body' },
+  { from: 'orchestrator', to: 'logger',        type: 'orchestrate', label: 'status' },
+
+  // Computation → Output (data results)
+  { from: 'build-html',    to: 'write-report',  type: 'write', label: 'full HTML' },
+  { from: 'build-summary', to: 'send-email',    type: 'write', label: 'email body' },
+];
+
+const PRESETS = [
+  { id: 'full',       label: 'Full System',    layers: ['input','computation','output','orchestrator'], conns: ['data-flow','transform','write','orchestrate'] },
+  { id: 'data-flow',  label: 'Data Flow',      layers: ['input','computation','output'],                conns: ['data-flow','transform','write'] },
+  { id: 'compute',    label: 'Compute Only',   layers: ['computation'],                                 conns: ['transform'] },
+  { id: 'io',         label: 'Input / Output',  layers: ['input','output','orchestrator'],               conns: ['data-flow','write','orchestrate'] },
+];
+
+// ──────────────────────────────────────
+// STATE
+// ──────────────────────────────────────
+
+const state = {
+  layers: { input: true, computation: true, output: true, orchestrator: true },
+  conns: { 'data-flow': true, transform: true, write: true, orchestrate: true },
+  zoom: 1,
+  panX: 0, panY: 0,
+  activePreset: 'full',
+  comments: [],
+  modalNode: null,
+};
+
+// ──────────────────────────────────────
+// INIT CONTROLS
+// ──────────────────────────────────────
+
+function initControls() {
+  // Presets
+  const presetsEl = document.getElementById('presets');
+  for (const p of PRESETS) {
+    const btn = document.createElement('button');
+    btn.className = 'preset-btn' + (p.id === state.activePreset ? ' active' : '');
+    btn.textContent = p.label;
+    btn.dataset.id = p.id;
+    btn.onclick = () => applyPreset(p);
+    presetsEl.appendChild(btn);
+  }
+
+  // Layer toggles
+  const layersEl = document.getElementById('layer-toggles');
+  for (const l of LAYERS) {
+    const label = document.createElement('label');
+    label.className = 'layer-toggle';
+    label.innerHTML = `<input type="checkbox" checked data-layer="${l.id}"><span class="layer-swatch" style="background:${l.color}"></span><span class="layer-label">${l.label}</span>`;
+    label.querySelector('input').onchange = (e) => {
+      state.layers[l.id] = e.target.checked;
+      state.activePreset = null;
+      updatePresetButtons();
+      updateAll();
+    };
+    layersEl.appendChild(label);
+  }
+
+  // Connection toggles
+  const connsEl = document.getElementById('conn-toggles');
+  for (const c of CONN_TYPES) {
+    const label = document.createElement('label');
+    label.className = 'conn-toggle';
+    const dashStyle = c.dash ? `background:repeating-linear-gradient(90deg,${c.color} 0,${c.color} 4px,transparent 4px,transparent 7px)` : `background:${c.color}`;
+    label.innerHTML = `<input type="checkbox" checked data-conn="${c.id}"><span class="conn-line" style="${dashStyle}"></span><span class="conn-label">${c.label}</span>`;
+    label.querySelector('input').onchange = (e) => {
+      state.conns[c.id] = e.target.checked;
+      state.activePreset = null;
+      updatePresetButtons();
+      updateAll();
+    };
+    connsEl.appendChild(label);
+  }
+}
+
+function applyPreset(p) {
+  state.activePreset = p.id;
+  for (const l of LAYERS) state.layers[l.id] = p.layers.includes(l.id);
+  for (const c of CONN_TYPES) state.conns[c.id] = p.conns.includes(c.id);
+
+  // Sync checkboxes
+  document.querySelectorAll('[data-layer]').forEach(cb => cb.checked = state.layers[cb.dataset.layer]);
+  document.querySelectorAll('[data-conn]').forEach(cb => cb.checked = state.conns[cb.dataset.conn]);
+  updatePresetButtons();
+  updateAll();
+}
+
+function updatePresetButtons() {
+  document.querySelectorAll('.preset-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.id === state.activePreset);
+  });
+}
+
+// ──────────────────────────────────────
+// SVG RENDERING
+// ──────────────────────────────────────
+
+function getNodeById(id) { return NODES.find(n => n.id === id); }
+
+function getNodeCenter(n) {
+  return { x: n.x + n.w / 2, y: n.y + n.h / 2 };
+}
+
+function renderDiagram() {
+  const svg = document.getElementById('diagram');
+  const wrap = document.getElementById('canvas-wrap');
+  const W = wrap.clientWidth;
+  const H = wrap.clientHeight;
+
+  // Build SVG content
+  let defs = `<defs>`;
+  for (const ct of CONN_TYPES) {
+    defs += `<marker id="arrow-${ct.id}" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="${ct.color}" opacity="0.7"/></marker>`;
+  }
+  defs += `</defs>`;
+
+  // Layer bands (background)
+  const layerBands = [
+    { layer: 'input',       y1: 25, y2: 130, label: 'INPUT' },
+    { layer: 'computation', y1: 175, y2: 380, label: 'COMPUTATION' },
+    { layer: 'orchestrator',y1: 365, y2: 455, label: 'ORCHESTRATOR' },
+    { layer: 'output',      y1: 430, y2: 530, label: 'OUTPUT' },
+  ];
+
+  let bands = '';
+  for (const b of layerBands) {
+    if (!state.layers[b.layer]) continue;
+    const layerDef = LAYERS.find(l => l.id === b.layer);
+    bands += `<rect x="10" y="${b.y1}" width="1140" height="${b.y2 - b.y1}" rx="8" fill="${layerDef.fill}" opacity="0.35"/>`;
+    bands += `<text x="24" y="${b.y1 + 18}" fill="${layerDef.color}" opacity="0.5" font-size="11" font-weight="800" letter-spacing="1.5">${b.label}</text>`;
+  }
+
+  // Connections
+  let paths = '';
+  for (const c of CONNECTIONS) {
+    if (!state.conns[c.type]) continue;
+    const fromNode = getNodeById(c.from);
+    const toNode = getNodeById(c.to);
+    if (!fromNode || !toNode) continue;
+    if (!state.layers[fromNode.layer] || !state.layers[toNode.layer]) continue;
+
+    const ct = CONN_TYPES.find(t => t.id === c.type);
+    const from = getNodeCenter(fromNode);
+    const to = getNodeCenter(toNode);
+
+    // Calculate control points for curved path
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const midX = (from.x + to.x) / 2;
+    const midY = (from.y + to.y) / 2;
+
+    // Offset control points perpendicular to the line
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const curvature = Math.min(dist * 0.2, 40);
+
+    let d;
+    if (Math.abs(dy) > Math.abs(dx)) {
+      // Mostly vertical
+      d = `M${from.x},${from.y + fromNode.h/2} C${from.x},${midY} ${to.x},${midY} ${to.x},${to.y - toNode.h/2}`;
+    } else {
+      // Mostly horizontal
+      d = `M${from.x + fromNode.w/2},${from.y} C${midX},${from.y - curvature} ${midX},${to.y + curvature} ${to.x - toNode.w/2},${to.y}`;
+    }
+
+    const dashAttr = ct.dash ? `stroke-dasharray="${ct.dash}"` : '';
+    paths += `<path d="${d}" fill="none" stroke="${ct.color}" stroke-width="1.5" opacity="0.5" ${dashAttr} marker-end="url(#arrow-${ct.id})"/>`;
+
+    // Label on connection
+    if (c.label) {
+      paths += `<text x="${midX}" y="${midY - 6}" text-anchor="middle" fill="${ct.color}" opacity="0.6" font-size="9.5" font-weight="500">${c.label}</text>`;
+    }
+  }
+
+  // Nodes
+  let nodes = '';
+  const visibleNodes = NODES.filter(n => state.layers[n.layer]);
+  for (const n of visibleNodes) {
+    const layerDef = LAYERS.find(l => l.id === n.layer);
+    const hasComment = state.comments.some(c => c.target === n.id);
+    const groupClass = 'node-group' + (hasComment ? ' node-commented' : '');
+
+    nodes += `<g class="${groupClass}" data-node="${n.id}" onclick="openModal('${n.id}')">`;
+    nodes += `<rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="var(--node-r)" fill="${layerDef.fill}" stroke="${layerDef.color}" stroke-width="1.5" opacity="0.9"/>`;
+    nodes += `<text x="${n.x + n.w/2}" y="${n.y + 22}" text-anchor="middle" fill="${layerDef.color}" font-size="12" font-weight="700">${n.label}</text>`;
+    nodes += `<text x="${n.x + n.w/2}" y="${n.y + 37}" text-anchor="middle" fill="${layerDef.color}" font-size="9.5" opacity="0.6">${n.subtitle}</text>`;
+    if (hasComment) {
+      nodes += `<circle cx="${n.x + n.w - 8}" cy="${n.y + 8}" r="5" fill="var(--amber)"/>`;
+    }
+    nodes += `</g>`;
+  }
+
+  const viewBox = `${-state.panX/state.zoom} ${-state.panY/state.zoom} ${W/state.zoom} ${H/state.zoom}`;
+  svg.setAttribute('viewBox', `0 0 ${1160/state.zoom + 40} ${560/state.zoom + 20}`);
+
+  // Apply zoom via transform
+  svg.innerHTML = `${defs}<g transform="translate(${state.panX},${state.panY}) scale(${state.zoom})">${bands}${paths}${nodes}</g>`;
+}
+
+// ──────────────────────────────────────
+// ZOOM
+// ──────────────────────────────────────
+
+function zoomIn()    { state.zoom = Math.min(state.zoom + 0.15, 2.5); renderDiagram(); }
+function zoomOut()   { state.zoom = Math.max(state.zoom - 0.15, 0.4); renderDiagram(); }
+function zoomReset() { state.zoom = 1; state.panX = 0; state.panY = 0; renderDiagram(); }
+
+// ──────────────────────────────────────
+// COMMENTS
+// ──────────────────────────────────────
+
+function openModal(nodeId) {
+  const node = getNodeById(nodeId);
+  if (!node) return;
+  state.modalNode = node;
+  document.getElementById('modal-title').textContent = node.label;
+  document.getElementById('modal-file').textContent = node.subtitle + ' — ' + node.detail;
+  document.getElementById('modal-text').value = '';
+  document.getElementById('modal').classList.add('open');
+  setTimeout(() => document.getElementById('modal-text').focus(), 50);
+}
+
+function closeModal() {
+  document.getElementById('modal').classList.remove('open');
+  state.modalNode = null;
+}
+
+function saveComment() {
+  const text = document.getElementById('modal-text').value.trim();
+  if (!text || !state.modalNode) return;
+  state.comments.push({
+    id: Date.now(),
+    target: state.modalNode.id,
+    targetLabel: state.modalNode.label,
+    targetFile: state.modalNode.subtitle,
+    text,
+  });
+  closeModal();
+  updateAll();
+}
+
+function deleteComment(id) {
+  state.comments = state.comments.filter(c => c.id !== id);
+  updateAll();
+}
+
+function renderComments() {
+  const list = document.getElementById('comments-list');
+  document.getElementById('comment-count').textContent = state.comments.length;
+  if (state.comments.length === 0) {
+    list.innerHTML = '<div class="no-comments">Click a node to add feedback</div>';
+    return;
+  }
+  list.innerHTML = state.comments.map(c => `
+    <div class="comment-card">
+      <span class="del" onclick="deleteComment(${c.id})">remove</span>
+      <div class="target">${c.targetLabel}</div>
+      <div class="file">${c.targetFile}</div>
+      <div class="body">${c.text}</div>
+    </div>
+  `).join('');
+}
+
+// ──────────────────────────────────────
+// PROMPT
+// ──────────────────────────────────────
+
+function updatePrompt() {
+  const parts = [];
+  const visibleLayers = LAYERS.filter(l => state.layers[l.id]).map(l => l.label);
+  const allVisible = visibleLayers.length === LAYERS.length;
+
+  parts.push(`Architecture review of builder.ts (PadSplit Digest orchestrator).`);
+
+  if (!allVisible) {
+    parts.push(`Focusing on: ${visibleLayers.join(', ')} layer${visibleLayers.length > 1 ? 's' : ''}.`);
+  }
+
+  // Summarize visible structure
+  const visibleNodes = NODES.filter(n => state.layers[n.layer]);
+  const byLayer = {};
+  for (const n of visibleNodes) {
+    if (!byLayer[n.layer]) byLayer[n.layer] = [];
+    byLayer[n.layer].push(n.label);
+  }
+
+  if (state.layers.input) {
+    parts.push(`\nInputs: ${byLayer.input?.join(', ') || 'none visible'}`);
+  }
+  if (state.layers.computation) {
+    parts.push(`Computation: ${byLayer.computation?.join(', ') || 'none visible'}`);
+  }
+  if (state.layers.output) {
+    parts.push(`Outputs: ${byLayer.output?.join(', ') || 'none visible'}`);
+  }
+
+  if (state.comments.length > 0) {
+    parts.push(`\nFeedback on specific components:\n`);
+    for (const c of state.comments) {
+      parts.push(`**${c.targetLabel}** (${c.targetFile}):\n${c.text}\n`);
+    }
+  }
+
+  document.getElementById('prompt-output').textContent = parts.join('\n');
+}
+
+function copyPrompt() {
+  const text = document.getElementById('prompt-output').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('copy-btn');
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+  });
+}
+
+// ──────────────────────────────────────
+// UPDATE ALL
+// ──────────────────────────────────────
+
+function updateAll() {
+  renderDiagram();
+  renderComments();
+  updatePrompt();
+}
+
+// ESC to close modal
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeModal();
+  if (e.key === 'Enter' && document.getElementById('modal').classList.contains('open')) saveComment();
+});
+
+// Pan with mouse drag on canvas
+(() => {
+  const wrap = document.getElementById('canvas-wrap');
+  let dragging = false, startX, startY, startPanX, startPanY;
+  wrap.addEventListener('mousedown', (e) => {
+    if (e.target.closest('.node-group') || e.target.closest('.zoom-btn')) return;
+    dragging = true;
+    startX = e.clientX; startY = e.clientY;
+    startPanX = state.panX; startPanY = state.panY;
+    wrap.style.cursor = 'grabbing';
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    state.panX = startPanX + (e.clientX - startX);
+    state.panY = startPanY + (e.clientY - startY);
+    renderDiagram();
+  });
+  window.addEventListener('mouseup', () => { dragging = false; wrap.style.cursor = ''; });
+
+  // Scroll to zoom
+  wrap.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? -0.08 : 0.08;
+    state.zoom = Math.max(0.4, Math.min(2.5, state.zoom + delta));
+    renderDiagram();
+  }, { passive: false });
+})();
+
+// Boot
+initControls();
+updateAll();
+</script>
+</body>
+</html>

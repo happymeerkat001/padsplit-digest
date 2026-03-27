@@ -2,13 +2,17 @@
  * Classification orchestrator
  * Rules-first, LLM fallback
  */
+// purpose: (output) classifies messages using a rules first then llm, then pending messages (Computation) by calling classifymessage for each using (Input) dependencies from rules, llm, db, and logger modules  
+// purpose: reads pending messages from DB (Control),
+//         classifies each using rules-first/LLM-fallback (Control, Output),
+//         writes results back to DB (Mutation)
 
-import { classifyWithRules, computeUrgency } from './rules.js';
-import { classifyWithLLM } from './llm.js';
-import { getPendingItems, updateItemClassification } from '../db/items.js';
-import { logger } from '../utils/logger.js';
+import { classifyWithRules, computeUrgency } from './rules.js'; // know from ./path, local sibling module for rules-based classification and urgency computation 
+import { classifyWithLLM } from './llm.js'; // known from ./path, local sibling module for LLM classification
+import { getPendingItems, updateItemClassification } from '../db/items.js'; // know from ../db/items.js, database access for pending items and updating classification results
+import { logger } from '../utils/logger.js'; // knwon from ../utils/logger.js, logging utility for structured logs
 
-export interface ClassificationResult {
+export interface ClassificationResult { // know as classification result
   intent: string;
   confidence: number;
   isHighRisk: boolean;
@@ -18,9 +22,9 @@ export interface ClassificationResult {
 }
 
 // Classify a single message
-export async function classifyMessage(text: string): Promise<ClassificationResult> {
+export async function classifyMessage(text: string): Promise<ClassificationResult> { // run classification function, with text input and return classification result
   // Step 1: Rules-based classification
-  const rules = classifyWithRules(text);
+  const rules = classifyWithRules(text); //memread- module and stack-> control ()
 
   // If high-risk, rules are authoritative
   if (rules.isHighRisk) {
@@ -49,10 +53,10 @@ export async function classifyMessage(text: string): Promise<ClassificationResul
 
   // Step 2: LLM fallback for ambiguous messages
   try {
-    const llm = await classifyWithLLM(text);
-    const urgency = computeUrgency(llm.intent, llm.confidence, rules.isHighRisk);
+    const llm = await classifyWithLLM(text); // memread- text input, calls OpenAI API for classification - control 
+    const urgency = computeUrgency(llm.intent, llm.confidence, rules.isHighRisk); // memread- compute urgency based on LLM result and rules high-risk flag - control
 
-    return {
+    return { //return-> control classification result from LLM
       intent: llm.intent,
       confidence: llm.confidence,
       isHighRisk: rules.isHighRisk, // Rules override for high-risk
@@ -61,7 +65,7 @@ export async function classifyMessage(text: string): Promise<ClassificationResul
       method: 'llm',
     };
   } catch (err) {
-    logger.error('LLM classification failed, using rules', { error: String(err) });
+    logger.error('LLM classification failed, using rules', { error: String(err) }); // tell- log error if LLM classification fails
 
     // Fall back to rules result
     const urgency = computeUrgency(rules.intent, rules.confidence, rules.isHighRisk);
@@ -77,8 +81,8 @@ export async function classifyMessage(text: string): Promise<ClassificationResul
 }
 
 // Classify all pending items in database
-export async function classifyPendingItems(): Promise<number> {
-  const items = getPendingItems();
+export async function classifyPendingItems(): Promise<number> { //run classification for pending items, no input, returns number of items classified
+  const items = getPendingItems(); // memread- DB call to get pending items - control
 
   if (items.length === 0) {
     logger.info('No pending items to classify');
@@ -93,27 +97,27 @@ export async function classifyPendingItems(): Promise<number> {
     if (!item.id) continue;
 
     // Use resolved body if available, otherwise raw body
-    const text = item.body_resolved || item.body_raw || item.subject || '';
+    const text = item.body_resolved || item.body_raw || item.subject || ''; 
 
     if (!text.trim()) {
-      logger.warn('Skipping item with no content', { id: item.id });
+      logger.warn('Skipping item with no content', { id: item.id }); // tell- log warning if item has no content to classify
       continue;
     }
 
     try {
       const result = await classifyMessage(text);
 
-      updateItemClassification(item.id, {
-        intent: result.intent,
+      updateItemClassification(item.id, { //memwrite- update database with classification result - mutation
+        intent: result.intent, 
         confidence: result.confidence,
         is_high_risk: result.isHighRisk,
         urgency: result.urgency,
         reason: result.reason,
       });
 
-      classified++;
+      classified++; // mutation- increment classified count
 
-      logger.info('Classified item', {
+      logger.info('Classified item', { // tell- log info about classified item  
         id: item.id,
         intent: result.intent,
         urgency: result.urgency,
@@ -128,5 +132,5 @@ export async function classifyPendingItems(): Promise<number> {
   }
 
   logger.info('Classification complete', { classified, total: items.length });
-  return classified;
+  return classified; // return number of items classified - control
 }

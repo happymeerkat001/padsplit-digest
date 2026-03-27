@@ -1,13 +1,9 @@
-/**
- * One-time Honeywell session setup
- *
- * Run: npm run setup:honeywell
- */
 
-import { chromium } from 'playwright';
-import { existsSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { config } from '../src/config.js';
+
+import { chromium } from 'playwright'; // external output/tell
+import { existsSync, mkdirSync } from 'node:fs'; // external input/output, data read/write
+import { dirname } from 'node:path'; // computation/transformation, path manipulation
+import { config } from '../src/config.js'; // memory/reference, configuration data
 
 const PORTAL_URL = 'https://mytotalconnectcomfort.com/portal';
 

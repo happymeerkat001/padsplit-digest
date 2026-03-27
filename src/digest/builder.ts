@@ -1,15 +1,17 @@
-import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { config } from '../config.js';
+
+
+import { createHash } from 'node:crypto'; //computation/transformation
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'; // boudary in/out 
+import { resolve } from 'node:path'; // computation/transformation
+import { config } from '../config.js'; // memory store
 import {
   createDigest,
   getLastDigestHash,
   getVisibleClassifiedItems,
   markItemsSent,
   type DigestItem,
-} from '../db/items.js';
-import { logger } from '../utils/logger.js';
+} from '../db/items.js'; // boundary in/out
+import { logger } from '../utils/logger.js'; // boundary out
 
 interface SenderGroup {
   key: string;
@@ -485,21 +487,21 @@ function writeDigestReport(html: string, now: Date): string {
   return outputPath;
 }
 
-export async function buildDigest(newItemCount = 0): Promise<{ itemCount: number; reportPath: string }> {
-  const items = getVisibleClassifiedItems(config.digest.visibilityWindowHours);
-  const groups = groupBySenderCategory(items);
+export async function buildDigest(newItemCount = 0): Promise<{ itemCount: number; reportPath: string }> { // export ( newItemCount Input)  
+  const items = getVisibleClassifiedItems(config.digest.visibilityWindowHours); // boundary in
+  const groups = groupBySenderCategory(items); // computation/transformation
 
-  const urgentCount = items.filter((item) => item.urgency === 'high').length;
-  const itemIds = items.map((item) => item.id).filter((id): id is number => Number.isInteger(id));
-  const visibleItemsHash = createHash('sha256').update(JSON.stringify(itemIds)).digest('hex');
+  const urgentCount = items.filter((item) => item.urgency === 'high').length; // computation/transformation
+  const itemIds = items.map((item) => item.id).filter((id): id is number => Number.isInteger(id)); // computation/transformation
+  const visibleItemsHash = createHash('sha256').update(JSON.stringify(itemIds)).digest('hex'); // computation/transformation
 
-  const lastHash = getLastDigestHash();
-  if (lastHash === visibleItemsHash && newItemCount === 0) {
+  const lastHash = getLastDigestHash(); // boundary in
+  if (lastHash === visibleItemsHash && newItemCount === 0) { // computation/ iteration
     logger.info('Digest unchanged - skipping no-op digest', {
       visibleItemsHash,
       itemCount: items.length,
     });
-    return { itemCount: items.length, reportPath: '' };
+    return { itemCount: items.length, reportPath: '' }; // early return for no-op case
   }
 
   const now = new Date();
