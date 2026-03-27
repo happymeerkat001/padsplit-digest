@@ -46,7 +46,15 @@ async function runPipeline(): Promise<void> {
   logger.info('Pipeline started');
 
   try {
-    if (!config.padsplit.cookie && existsSync(config.padsplit.sessionPath)) {
+    if (!config.padsplit.cookie) {
+      const sessionExists = existsSync(config.padsplit.sessionPath);
+
+      if (!sessionExists) {
+        throw new AuthError('Neither PADSPLIT_COOKIE nor browser session found — run `npm run setup-session` first');
+      }
+
+      logger.info('Using persistent browser session for authentication');
+
       try {
         const cookie = await getPadsplitCookies();
         setSessionCookie(cookie);
@@ -56,7 +64,6 @@ async function runPipeline(): Promise<void> {
           logger.error('PadSplit auth failed — re-run `npm run setup-session` and copy session to VPS', {
             error: String(err),
           });
-          throw err;
         }
         throw err;
       }
