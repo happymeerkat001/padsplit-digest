@@ -78,8 +78,7 @@ export const config = { // call in config, main configuration object for the app
     cookie: optional('PADSPLIT_COOKIE', ''),
     communicationUrl: optional('PADSPLIT_COMMUNICATION_URL', 'https://www.padsplit.com/host/communication'),
     tasksUrl: optional('PADSPLIT_TASKS_URL', 'https://www.padsplit.com/host/tasks'),
-    sessionPath: optional('PADSPLIT_SESSION_PATH', './data/browser-session'),
-  },
+  sessionPath: optional('PADSPLIT_SESSION_PATH', '/home/ubuntu/padsplit-digest/data/browser-session'),  },
   honeywell: {
     username: optional('HONEYWELL_USERNAME', ''),
     password: optional('HONEYWELL_PASSWORD', ''),

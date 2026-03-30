@@ -1,45 +1,69 @@
 import { chromium } from 'playwright';
-import { existsSync, mkdirSync } from 'node:fs';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import 'dotenv/config';
 
-const SESSION_DIR = process.env['PADSPLIT_SESSION_PATH'] ?? './data/browser-session';
-const COMMUNICATION_URL = 'https://www.padsplit.com/host/communication';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-async function main(): Promise<void> {
-  console.log('\n=== PadSplit Session Setup ===\n');
-  console.log(`Session will be saved to: ${SESSION_DIR}\n`);
+const EMAIL = process.env.PADSPLIT_EMAIL;
+const PASSWORD = process.env.PADSPLIT_PASSWORD;
+const STATE_PATH = path.join(__dirname, '../data/padsplit-state.json');
 
-  if (!existsSync(SESSION_DIR)) {
-    mkdirSync(SESSION_DIR, { recursive: true });
+(async () => {
+  if (!EMAIL || !PASSWORD) {
+    console.error('❌ Missing credentials in .env');
+    process.exit(1);
   }
 
-  const context = await chromium.launchPersistentContext(SESSION_DIR, {
-    headless: false,
-    userAgent:
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    args: [
-      '--disable-blink-features=AutomationControlled',
-    ],
-    ignoreDefaultArgs: ['--enable-automation'],
+  const browser = await chromium.launch({ headless: false }); 
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 800 }
   });
-
   const page = await context.newPage();
-  await page.goto(COMMUNICATION_URL, { waitUntil: 'domcontentloaded' });
 
-  console.log('Browser opened — please log in via Google.');
-  console.log('Complete login and any 2FA, then press Enter here when done.\n');
+  try {
+    console.log('🌐 Loading PadSplit...');
+    await page.goto('https://www.padsplit.com/', { waitUntil: 'domcontentloaded' });
 
-  await new Promise<void>((resolve) => {
-    process.stdin.resume();
-    process.stdin.once('data', () => resolve());
-  });
+    console.log('🔘 Opening Sign In Modal...');
+    // We target the button specifically by its text since the ID was tricky
+    await page.getByRole('button', { name: /Sign In/i }).first().click();
 
-  await context.close();
+    console.log('⌛ Waiting for Modal fields...');
+    // Wait for the Email input to be visible INSIDE the popup
+    const emailField = page.locator('input[name="email"], input[type="email"]');
+    await emailField.waitFor({ state: 'visible', timeout: 10000 });
 
-  console.log(`\nSession saved to ${SESSION_DIR}`);
-  console.log('You can now run the pipeline (npm run digest:once or npm run digest:local).\n');
-}
+    console.log('✍️  Filling credentials...');
+    await emailField.fill(EMAIL);
+    await page.locator('input[name="password"]').fill(PASSWORD);
+    
+    console.log('🚀 Clicking Submit...');
+    // Clicking the "Sign In" button inside the modal
+    await page.getByRole('button', { name: 'Sign in' }).last().click();
 
-main().catch((err) => {
-  console.error('Session setup failed:', err);
-  process.exit(1);
-});
+    // Instead of waiting for a URL change (which might not happen in a modal),
+    // we wait for the "Login" network request to finish successfully.
+    console.log('📡 Waiting for API authentication...');
+    await page.waitForResponse(resp => resp.url().includes('graphql') && resp.status() === 200);
+
+    // Give it a second to let cookies settle
+    await page.waitForTimeout(3000);
+
+    // Ensure directory exists
+    const dir = path.dirname(STATE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+    await context.storageState({ path: STATE_PATH });
+    console.log('✅ Success! Master key saved to data/padsplit-state.json');
+
+  } catch (error) {
+    console.error('❌ Error:', error.message);
+    await page.screenshot({ path: 'data/error.png' });
+  } finally {
+    await browser.close();
+    process.exit();
+  }
+})();
