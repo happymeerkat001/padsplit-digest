@@ -310,6 +310,7 @@ ${sections.join('\n')}
 }
 
 function buildDigestHtml(groups: SenderGroup[], now: Date): string {
+  const sitePassword = process.env.DIGEST_SITE_PASSWORD || 'LiNest@2025';
   const { groups: allowedGroups } = config.digest;
   const visibleGroups = groups
     .map((group): SenderGroup => {
@@ -353,6 +354,20 @@ function buildDigestHtml(groups: SenderGroup[], now: Date): string {
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <script>
+    (function() {
+      const authKey = 'padsplit_lock';
+      if (sessionStorage.getItem(authKey) !== 'true') {
+        const input = prompt("Enter Password:");
+        if (input === "${sitePassword}") {
+          sessionStorage.setItem(authKey, 'true');
+        } else {
+          document.documentElement.innerHTML = '<h1>Access Denied</h1>';
+          window.stop();
+        }
+      }
+    })();
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>PadSplit Daily Digest</title>
   <style>

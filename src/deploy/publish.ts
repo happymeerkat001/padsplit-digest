@@ -153,14 +153,16 @@ export function generateHistoryPage(): string {
 export function firebaseDeploy(): boolean {
   try {
     logger.info('Deploying Firebase Hosting');
-    execSync('firebase deploy --only hosting', { stdio: 'inherit' });
+    // Using npx ensures it finds the local firebase bin
+    // Using --token allows the VPS to bypass the browser login
+    const token = process.env.FIREBASE_TOKEN ? `--token "${process.env.FIREBASE_TOKEN}"` : '';
+    execSync(`npx firebase deploy --only hosting ${token}`, { stdio: 'inherit' });
+
     writeDeployMeta(new Date().toISOString());
     logger.info('Firebase Hosting deploy complete');
     return true;
   } catch (err) {
-    logger.error('Firebase deploy failed - digest was generated but not published', {
-      error: String(err),
-    });
+    logger.error('Firebase deploy failed', { error: String(err) });
     return false;
   }
 }
