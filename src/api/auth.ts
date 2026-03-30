@@ -7,21 +7,17 @@ import { AuthError } from './client.js';
 
 const COMMUNICATION_URL = 'https://www.padsplit.com/host/communication';
 
-async function extractCookies(): Promise<string> {
-  const sessionPath = config.padsplit.sessionPath;
+// On the VPS: src/api/auth.ts
+async function extractCookies() {
+  const { sessionPath } = config.padsplit;
 
-  if (!existsSync(sessionPath)) {
-    throw new AuthError(
-      `PadSplit session directory not found at "${sessionPath}" — run \`npm run setup-session\` first`
-    );
-  }
-
-  const context = await chromium.launchPersistentContext(sessionPath, {
-    headless: true,
-  });
+  // 1. Launch browser normally
+  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+  const context = await browser.newContext({ storageState: sessionPath });
 
   try {
     const page = await context.newPage();
+    // ... keep the rest of your goto and cookie logic ...
     await page.goto(COMMUNICATION_URL, { waitUntil: 'domcontentloaded' });
 
     if (!page.url().includes('/host/')) {
