@@ -54,3 +54,6 @@ public/archives/
 public/history.html
 
 
+data/
+node_modules/
+.env
