@@ -1,4 +1,4 @@
-import { chromium } from 'playwright';
+import { chromium, type Browser, type BrowserContext } from 'playwright';
 import { existsSync } from 'node:fs';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
@@ -11,11 +11,14 @@ const COMMUNICATION_URL = 'https://www.padsplit.com/host/communication';
 async function extractCookies() {
   const { sessionPath } = config.padsplit;
 
-  // 1. Launch browser normally
-  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
-  const context = await browser.newContext({ storageState: sessionPath });
+  let browser: Browser | null = null;
+  let context: BrowserContext | null = null;
 
   try {
+    // 1. Launch browser normally
+    browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+    context = await browser.newContext({ storageState: sessionPath });
+
     const page = await context.newPage();
     // ... keep the rest of your goto and cookie logic ...
     await page.goto(COMMUNICATION_URL, { waitUntil: 'domcontentloaded' });
@@ -44,6 +47,9 @@ async function extractCookies() {
     const csrftoken = padsplitCookies.find((c) => c.name === 'csrftoken')?.value;
 
     if (!sessionid || !csrftoken) {
+      logger.warn('Session cookies missing in stored state', {
+        cookieNames: padsplitCookies.map((c) => c.name),
+      });
       throw new AuthError('Session cookies not found — re-run `npm run setup-session`');
     }
 
@@ -59,7 +65,8 @@ async function extractCookies() {
 
     return cookieHeader;
   } finally {
-    await context.close();
+    await context?.close();
+    await browser?.close();
   }
 }
 

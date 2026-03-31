@@ -148,9 +148,42 @@ function filterTaskItemsByStatus(items: DigestItem[]): DigestItem[] {
   return items.filter((item) => allowedStatuses.has(parseTaskDetails(item).status));
 }
 
+function getRenderableTasks(items: DigestItem[]): DigestItem[] {
+  return items.filter((item) => {
+    const { description } = parseTaskDetails(item);
+    const subject = (item.subject || '').trim().toLowerCase();
+    const desc = description.trim().toLowerCase();
+    if (!description) return false;
+    if (desc === '(no description)' || desc === 'task item') return false;
+    if (subject === 'task') return false;
+    return true;
+  });
+}
+
+function getRecentMemberMessages(items: DigestItem[], limit = 3): DigestItem[] {
+  const uniqueByContent = new Map<string, DigestItem>();
+  const sorted = [...items].sort(
+    (a, b) => new Date(b.received_at).getTime() - new Date(a.received_at).getTime()
+  );
+
+  for (const item of sorted) {
+    const key = `${item.body_raw ?? ''}::${item.sender_email ?? item.tenant_name ?? ''}`;
+    if (!uniqueByContent.has(key)) {
+      uniqueByContent.set(key, item);
+    }
+    if (uniqueByContent.size >= limit) {
+      break;
+    }
+  }
+
+  return Array.from(uniqueByContent.values());
+}
+
 function renderItems(group: SenderGroup): string {
   if (group.key === 'member_messages') {
-    const rows = group.items.map((item) => {
+    const latestMessages = getRecentMemberMessages(group.items, 3);
+
+    const rows = latestMessages.map((item) => {
       const member = escapeHtml(item.sender_email || 'Member');
       const property = escapeHtml(item.subject || '(No property)');
       const message = escapeHtml(truncateText(item.body_raw || '(No message)', 60));
@@ -185,6 +218,7 @@ function renderItems(group: SenderGroup): string {
   }
 
   if (group.key === 'tasks') {
+    const filteredItems = getRenderableTasks(group.items);
     const byStatus = new Map<string, Array<{
       item: DigestItem;
       taskType: string;
@@ -193,7 +227,7 @@ function renderItems(group: SenderGroup): string {
       status: string;
     }>>();
 
-    for (const item of group.items) {
+    for (const item of filteredItems) {
       const { taskType, room, description, status } = parseTaskDetails(item);
       const statusKey = status || 'Other';
       const bucket = byStatus.get(statusKey) ?? [];
@@ -315,12 +349,18 @@ function buildDigestHtml(groups: SenderGroup[], now: Date): string {
   const visibleGroups = groups
     .map((group): SenderGroup => {
       if (group.key !== 'tasks') {
+        if (group.key === 'member_messages') {
+          return {
+            ...group,
+            items: getRecentMemberMessages(group.items, 3),
+          };
+        }
         return group;
       }
 
       return {
         ...group,
-        items: filterTaskItemsByStatus(group.items),
+        items: getRenderableTasks(filterTaskItemsByStatus(group.items)),
       };
     })
     .filter((group) => group.items.length > 0)
@@ -343,12 +383,21 @@ function buildDigestHtml(groups: SenderGroup[], now: Date): string {
   });
   const deployedAt = readDeployMetaLocalized();
 
-  const sections = visibleGroups.map((group) => `
+  const sections = visibleGroups.map((group) => {
+    const label = group.key === 'member_messages' ? 'Recent Context (Last 3)' : group.label;
+    const displayCount =
+      group.key === 'member_messages'
+        ? getRecentMemberMessages(group.items, 3).length
+        : group.key === 'tasks'
+          ? getRenderableTasks(group.items).length
+          : group.items.length;
+    return `
     <section>
-      <h2>${escapeHtml(group.label)} (${group.items.length})</h2>
+      <h2>${escapeHtml(label)} (${displayCount})</h2>
       ${renderItems(group)}
     </section>
-  `);
+  `;
+  });
 
   return `<!doctype html>
 <html lang="en">
@@ -475,9 +524,68 @@ function buildDigestHtml(groups: SenderGroup[], now: Date): string {
     li {
       margin: 6px 0;
     }
+    #auth-overlay {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(15, 17, 23, 0.98);
+      display: flex; flex-direction: column; justify-content: center; align-items: center;
+      z-index: 9999; color: white; font-family: sans-serif;
+    }
+    .pin-input {
+      background: #1a1d27; border: 1px solid #2e3144; color: white;
+      padding: 12px; font-size: 24px; text-align: center; width: 150px;
+      border-radius: 8px; margin-top: 20px; outline: none;
+    }
+    .hidden { display: none !important; }
+    body.locked { overflow: hidden; }
   </style>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const SECRET_PIN = "9999"; // Set your preferred 4-digit PIN here
+      const overlay = document.getElementById('auth-overlay');
+      const pinInput = document.getElementById('pin');
+      const errorEl = document.getElementById('error');
+
+      if (!overlay || !(pinInput instanceof HTMLInputElement) || !errorEl) {
+        return;
+      }
+
+      const authorize = () => {
+        overlay.classList.add('hidden');
+        document.body.classList.remove('locked');
+        sessionStorage.setItem('authorized', 'true');
+      };
+
+      if (sessionStorage.getItem('authorized') === 'true') {
+        authorize();
+        return;
+      }
+
+      document.body.classList.add('locked');
+      pinInput.addEventListener('input', (e) => {
+        const target = e.target;
+        if (!(target instanceof HTMLInputElement)) {
+          return;
+        }
+        const value = target.value || '';
+        if (value === SECRET_PIN) {
+          authorize();
+        } else if (value.length === 4) {
+          errorEl.style.display = 'block';
+          target.value = '';
+        } else {
+          errorEl.style.display = 'none';
+        }
+      });
+    });
+  </script>
 </head>
 <body>
+  <div id="auth-overlay">
+    <h2>Assurance REI Digest</h2>
+    <p>Enter PIN to view maintenance tasks</p>
+    <input type="password" id="pin" class="pin-input" maxlength="4" autofocus>
+    <p id="error" style="color: #ef4444; margin-top: 10px; display: none;">Incorrect PIN</p>
+  </div>
   <main>
     <header>
       <h1>PadSplit Daily Digest</h1>
