@@ -155,7 +155,8 @@ export function firebaseDeploy(): boolean {
     logger.info('Deploying Firebase Hosting');
     // Using npx ensures it finds the local firebase bin
     // Using --token allows the VPS to bypass the browser login
-    const token = process.env.FIREBASE_TOKEN ? `--token "${process.env.FIREBASE_TOKEN}"` : '';
+    const tokenEnv = process.env['FIREBASE_TOKEN'];
+    const token = tokenEnv ? `--token "${tokenEnv}"` : '';
     execSync(`npx firebase deploy --only hosting ${token}`, { stdio: 'inherit' });
 
     writeDeployMeta(new Date().toISOString());

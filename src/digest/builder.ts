@@ -344,7 +344,7 @@ ${sections.join('\n')}
 }
 
 function buildDigestHtml(groups: SenderGroup[], now: Date): string {
-  const sitePassword = process.env.DIGEST_SITE_PASSWORD || 'LiNest@2025';
+  const sitePassword = process.env['DIGEST_SITE_PASSWORD'] || 'LiNest@2025';
   const { groups: allowedGroups } = config.digest;
   const visibleGroups = groups
     .map((group): SenderGroup => {

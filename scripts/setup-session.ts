@@ -7,8 +7,8 @@ import 'dotenv/config';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const EMAIL = process.env.PADSPLIT_EMAIL;
-const PASSWORD = process.env.PADSPLIT_PASSWORD;
+const EMAIL = process.env['PADSPLIT_EMAIL'] ?? '';
+const PASSWORD = process.env['PADSPLIT_PASSWORD'] ?? '';
 const STATE_PATH = path.join(__dirname, '../data/padsplit-state.json');
 
 (async () => {
@@ -22,22 +22,6 @@ const STATE_PATH = path.join(__dirname, '../data/padsplit-state.json');
     viewport: { width: 1280, height: 800 }
   });
   const page = await context.newPage();
-  const dir = path.dirname(STATE_PATH);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-  const waitForSessionId = async (): Promise<boolean> => {
-    const maxAttempts = 10;
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      const cookies = await context.cookies();
-      const hasSessionId = cookies.some((c) => c.name === 'sessionid');
-      if (hasSessionId) {
-        console.log(`✅ sessionid cookie detected (attempt ${attempt})`);
-        return true;
-      }
-      await page.waitForTimeout(1000);
-    }
-    return false;
-  };
 
   try {
     console.log('🌐 Loading PadSplit...');
@@ -68,13 +52,9 @@ const STATE_PATH = path.join(__dirname, '../data/padsplit-state.json');
     // Give it a second to let cookies settle
     await page.waitForTimeout(3000);
 
-    const hasSessionId = await waitForSessionId();
-    if (!hasSessionId) {
-      console.error('❌ sessionid cookie not detected after login; not saving state.');
-      await page.screenshot({ path: path.join(dir, 'session-missing.png') });
-      process.exitCode = 1;
-      return;
-    }
+    // Ensure directory exists
+    const dir = path.dirname(STATE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
     await context.storageState({ path: STATE_PATH });
     console.log('✅ Success! Master key saved to data/padsplit-state.json');
@@ -86,4 +66,4 @@ const STATE_PATH = path.join(__dirname, '../data/padsplit-state.json');
     await browser.close();
     process.exit();
   }
-})();
+})(); 
