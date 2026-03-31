@@ -1,8 +1,10 @@
 // Purpose: categorizes messages based on sender names (control), call in config by resolveSenderCategory function, used for categorizing messages in the digest based on sender patterns, and provides main configuration settings for the application, including API keys, URLs, scheduling, and database configuration, with a function to validate critical configuration at startup to ensure necessary settings are in place for proper functionality using dependencies like dotenv for environment variable management and node:fs and node:path for file system operations related to database setup.
 
-import 'dotenv/config'; // Run On-  process.env 
+import * as dotenv from 'dotenv'; // Run On-  process.env 
 import { existsSync, mkdirSync } from 'node:fs'; // Run On - node: infrastructure 
-import { dirname } from 'node:path'; // Run On - node: infrastructure
+import { dirname, join, resolve } from 'node:path'; // Run On - node: infrastructure
+
+dotenv.config({ path: resolve(process.cwd(), '.env') });
 
 function optional(name: string, defaultValue: string): string {
   return process.env[name] ?? defaultValue;
@@ -78,7 +80,7 @@ export const config = { // call in config, main configuration object for the app
     cookie: optional('PADSPLIT_COOKIE', ''),
     communicationUrl: optional('PADSPLIT_COMMUNICATION_URL', 'https://www.padsplit.com/host/communication'),
     tasksUrl: optional('PADSPLIT_TASKS_URL', 'https://www.padsplit.com/host/tasks'),
-    sessionPath: optional('PADSPLIT_SESSION_PATH', '/root/padsplit-digest/data/padsplit-state.json'),
+    sessionPath: optional('PADSPLIT_SESSION_PATH', join(process.cwd(), 'data', 'padsplit-state.json')),
   },
   honeywell: {
     username: optional('HONEYWELL_USERNAME', ''),

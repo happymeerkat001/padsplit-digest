@@ -1,23 +1,33 @@
 import { chromium } from 'playwright';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import 'dotenv/config';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as dotenv from 'dotenv';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
-const EMAIL = process.env['PADSPLIT_EMAIL'] ?? '';
-const PASSWORD = process.env['PADSPLIT_PASSWORD'] ?? '';
-const STATE_PATH = path.join(__dirname, '../data/padsplit-state.json');
+const EMAIL = process.env['PADSPLIT_EMAIL'];
+const PASSWORD = process.env['PADSPLIT_PASSWORD'];
+
+// Ensure data directory exists
+const DATA_DIR = path.resolve(process.cwd(), 'data');
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+const STATE_PATH = process.env['PADSPLIT_SESSION_PATH'] || path.join(process.cwd(), 'data', 'padsplit-state.json');
 
 (async () => {
   if (!EMAIL || !PASSWORD) {
     console.error('❌ Missing credentials in .env');
+    console.error(`cwd: ${process.cwd()}`);
+    console.error(`.env exists: ${fs.existsSync(path.resolve(process.cwd(), '.env'))}`);
     process.exit(1);
   }
 
-  const browser = await chromium.launch({ headless: false }); 
+  const browser = await chromium.launch({
+    headless: false, // headed for manual login/captcha
+    slowMo: 100,
+  }); 
   const context = await browser.newContext({
     viewport: { width: 1280, height: 800 }
   });
@@ -52,9 +62,13 @@ const STATE_PATH = path.join(__dirname, '../data/padsplit-state.json');
     // Give it a second to let cookies settle
     await page.waitForTimeout(3000);
 
-    // Ensure directory exists
-    const dir = path.dirname(STATE_PATH);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const cookies = await context.cookies();
+    const hasSessionId = cookies.some((c) => c.name === 'sessionid');
+    if (!hasSessionId) {
+      console.error('❌ sessionid cookie missing. Make sure login completed, then re-run.');
+      await page.screenshot({ path: path.join(DATA_DIR, 'session-missing.png') });
+      process.exit(1);
+    }
 
     await context.storageState({ path: STATE_PATH });
     console.log('✅ Success! Master key saved to data/padsplit-state.json');
