@@ -60,7 +60,8 @@ const STATE_PATH = path.join(__dirname, '../data/padsplit-state.json');
     console.log('✅ Success! Master key saved to data/padsplit-state.json');
 
   } catch (error) {
-    console.error('❌ Error:', error.message);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('❌ Error:', errorMessage);
     await page.screenshot({ path: 'data/error.png' });
   } finally {
     await browser.close();
