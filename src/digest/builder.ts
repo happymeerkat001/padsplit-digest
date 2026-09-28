@@ -141,179 +141,214 @@ function parseTaskDetails(item: DigestItem): {
 }
 
 /**
- * Public digest policy (files copied to public/ and Firebase Hosting only).
+ * Public page (public/ and Firebase Hosting only).
  *
- * Kept:
- * - Counts: total, urgent, per-section, and per-status task counts.
- * - Known status labels (Open, In Progress, and the other fixed columns). They are
- *   count buckets. Unrecognized status text is counted under "Other" and not printed.
- * - Ticket subject (`item.subject`) when it is not copied from body_raw, sender_email,
- *   or tenant_name. The ticket adapter stores the property address in subject.
- * - Task type only for the structured label this codebase writes ("Type: Maintenance Ticket").
- *   Any other first body line is free text and is dropped.
- * - Room only when it matches a short room-label allowlist ("Bedroom", "Room 2", ...).
- *   parseTaskDetails reads room from body line 2. The ticket adapter puts the free-text
- *   ticket description in that slot, so those values fail the allowlist and are omitted.
- *
- * Omitted from the public page:
- * - Member-message rows and all other non-task rows (those sections are counts only).
- * - sender_email, tenant_name, body_raw, and the parsed description.
- *
- * Local digest HTML still renders member rows and task descriptions. Neither mode
- * embeds DIGEST_SITE_PASSWORD or SECRET_PIN.
+ * One line per house: "{house} · {n} open · oldest {k} days", plus a ticket
+ * category only when ticket_category is exactly repair, lock, leak, or other.
+ * The house name is house_id only when that value is a letter label with no
+ * digits and is not copied from subject, body, sender, or tenant text.
+ * Subject, description, room, and member rows are never printed.
+ * Local digest HTML is unchanged. Neither mode embeds a site password or PIN.
  */
-const PUBLIC_TASK_TYPES = new Set(['type: maintenance ticket']);
+const PUBLIC_TICKET_CATEGORIES = ['repair', 'lock', 'leak', 'other'] as const;
 
-const PUBLIC_ROOM_LABELS = new Set([
-  'bedroom',
-  'bathroom',
-  'kitchen',
-  'living room',
-  'hallway',
-  'basement',
-  'attic',
-  'laundry',
-  'common area',
-  'exterior',
+const CLOSED_TICKET_STATUSES = new Set([
+  'complete',
+  'completed',
+  'closed',
+  'resolved',
+  'cancelled',
+  'canceled',
+  'done',
 ]);
 
-function publicTaskType(taskType: string): string | null {
-  const trimmed = taskType.trim();
-  if (!PUBLIC_TASK_TYPES.has(trimmed.toLowerCase())) {
+function structuredHouseLabel(item: DigestItem): string | null {
+  const label = item.house_id?.trim() ?? '';
+  if (!/^[A-Za-z]+(?:[ -][A-Za-z]+)*$/.test(label)) {
     return null;
   }
-  return trimmed;
+
+  const needle = label.toLowerCase();
+  const freeText = [item.subject, item.body_raw, item.body_resolved, item.sender_email, item.tenant_name];
+  if (freeText.some((value) => (value ?? '').toLowerCase().includes(needle))) {
+    return null;
+  }
+
+  return label;
 }
 
-function publicRoomLabel(room: string): string | null {
-  const trimmed = room.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (PUBLIC_ROOM_LABELS.has(trimmed.toLowerCase())) {
-    return trimmed;
-  }
-  if (/^room\s+[a-z0-9-]{1,8}$/i.test(trimmed)) {
-    return trimmed;
+function structuredTicketCategory(item: DigestItem): (typeof PUBLIC_TICKET_CATEGORIES)[number] | null {
+  const raw = item.ticket_category?.trim().toLowerCase() ?? '';
+  if ((PUBLIC_TICKET_CATEGORIES as readonly string[]).includes(raw)) {
+    return raw as (typeof PUBLIC_TICKET_CATEGORIES)[number];
   }
   return null;
 }
 
-function publicTicketSubject(item: DigestItem): string | null {
-  const subject = (item.subject || '').trim();
-  if (!subject) {
-    return null;
-  }
-
-  const body = item.body_raw ?? '';
-  if (body.includes(subject)) {
-    return null;
-  }
-
-  const identities = [item.sender_email, item.tenant_name]
-    .map((value) => value?.trim())
-    .filter((value): value is string => Boolean(value));
-
-  if (identities.some((value) => subject.includes(value) || value.includes(subject))) {
-    return null;
-  }
-
-  return subject;
+function isOpenMaintenanceTicket(item: DigestItem): boolean {
+  const status = parseTaskDetails(item).status.trim().toLowerCase();
+  return !CLOSED_TICKET_STATUSES.has(status);
 }
 
-function publicUrgency(value: DigestItem['urgency']): string {
-  if (value === 'high' || value === 'medium' || value === 'low') {
-    return value;
+function ageInDays(receivedAt: string, now: Date): number {
+  const then = new Date(receivedAt).getTime();
+  if (Number.isNaN(then)) {
+    return 0;
+  }
+  const diff = now.getTime() - then;
+  if (diff <= 0) {
+    return 0;
+  }
+  return Math.floor(diff / 86_400_000);
+}
+
+function houseGroupKey(item: DigestItem): string {
+  const label = structuredHouseLabel(item);
+  if (label) {
+    return `name:${label.toLowerCase()}`;
+  }
+  const houseId = item.house_id?.trim();
+  if (houseId) {
+    return `id:${houseId}`;
+  }
+  const subject = item.subject?.trim();
+  if (subject) {
+    return `subject:${subject}`;
   }
   return 'unknown';
 }
 
-function renderPublicCountOnly(group: SenderGroup): string {
-  const urgent = group.items.filter((item) => item.urgency === 'high').length;
-  return `<p class="meta">${group.items.length} items · ${urgent} urgent. Item details are omitted from the public digest.</p>`;
+function formatPublicHouseLine(
+  label: string | null,
+  count: number,
+  oldestDays: number,
+  categories: ReadonlySet<string>,
+): string {
+  const dayWord = oldestDays === 1 ? 'day' : 'days';
+  const parts: string[] = [];
+  if (label) {
+    parts.push(label);
+  }
+  parts.push(`${count} open`);
+  parts.push(`oldest ${oldestDays} ${dayWord}`);
+  for (const category of PUBLIC_TICKET_CATEGORIES) {
+    if (categories.has(category)) {
+      parts.push(category);
+    }
+  }
+  return parts.join(' · ');
 }
 
-function renderPublicTaskBoard(group: SenderGroup): string {
-  const byStatus = new Map<string, Array<{
-    item: DigestItem;
-    taskType: string | null;
-    room: string | null;
-  }>>();
+function renderPublicDigest(groups: SenderGroup[], now: Date): string {
+  const tickets = groups
+    .filter((group) => group.key === 'tasks')
+    .flatMap((group) => group.items)
+    .filter((item) => isOpenMaintenanceTicket(item));
 
-  for (const item of group.items) {
-    const parsed = parseTaskDetails(item);
-    const statusKey = parsed.status || 'Other';
-    const bucket = byStatus.get(statusKey) ?? [];
-    bucket.push({
-      item,
-      taskType: publicTaskType(parsed.taskType),
-      room: publicRoomLabel(parsed.room),
-    });
-    byStatus.set(statusKey, bucket);
+  const grouped = new Map<string, { label: string | null; items: DigestItem[] }>();
+  for (const item of tickets) {
+    const key = houseGroupKey(item);
+    const bucket = grouped.get(key) ?? { label: structuredHouseLabel(item), items: [] };
+    if (!bucket.label) {
+      bucket.label = structuredHouseLabel(item);
+    }
+    bucket.items.push(item);
+    grouped.set(key, bucket);
   }
 
-  const { taskStatuses } = config.digest;
-  if (taskStatuses.length > 0) {
-    const allowedStatuses = new Set(taskStatuses);
-    for (const key of Array.from(byStatus.keys())) {
-      if (!allowedStatuses.has(key)) {
-        byStatus.delete(key);
+  const lines = Array.from(grouped.entries())
+    .map(([key, bucket]) => {
+      const ages = bucket.items.map((item) => ageInDays(item.received_at, now));
+      const oldestDays = ages.reduce((max, age) => Math.max(max, age), 0);
+      const categories = new Set<string>();
+      for (const item of bucket.items) {
+        const category = structuredTicketCategory(item);
+        if (category) {
+          categories.add(category);
+        }
       }
+      const label = bucket.items.every((item) => structuredHouseLabel(item) === bucket.label)
+        ? bucket.label
+        : null;
+      return {
+        key,
+        text: formatPublicHouseLine(label, bucket.items.length, oldestDays, categories),
+      };
+    })
+    .sort((a, b) => a.text.localeCompare(b.text) || a.key.localeCompare(b.key));
+
+  const updatedAt = now.toLocaleString('en-US', {
+    timeZone: config.schedule.timezone,
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+
+  const body = lines.length
+    ? `<ul>
+    ${lines.map((line) => `<li>${escapeHtml(line.text)}</li>`).join('\n    ')}
+  </ul>`
+    : '<p>no open tickets.</p>';
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>active maintenance tickets</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fa;
+      --card: #ffffff;
+      --text: #1e293b;
+      --muted: #64748b;
+      --line: #dce3ea;
     }
-  }
-
-  const knownStatuses = new Set<string>(TASK_COLUMNS.map((column) => column.status));
-  const sections: string[] = [];
-
-  const renderCards = (
-    cards: Array<{ item: DigestItem; taskType: string | null; room: string | null }>,
-  ): string =>
-    cards
-      .map(({ item, taskType, room }) => {
-        const receivedAt = new Date(item.received_at).toLocaleString('en-US', {
-          timeZone: config.schedule.timezone,
-        });
-        const subject = publicTicketSubject(item);
-        const meta = [taskType, room].filter((part): part is string => Boolean(part)).join(' | ');
-        const urgency = publicUrgency(item.urgency);
-
-        return `<div class="task-card">
-  ${subject ? `<div class="task-address">${escapeHtml(subject)}</div>` : ''}
-  ${meta ? `<div class="task-meta">${escapeHtml(meta)}</div>` : ''}
-  <div class="task-footer">${escapeHtml(urgency)} · ${escapeHtml(receivedAt)}</div>
-</div>`;
-      })
-      .join('\n');
-
-  for (const column of TASK_COLUMNS) {
-    const cards = byStatus.get(column.status) ?? [];
-    if (cards.length === 0) {
-      continue;
+    body {
+      margin: 0;
+      padding: 24px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
     }
-
-    sections.push(`<h3 style="border-left: 4px solid ${column.color}">${escapeHtml(column.status)} (${cards.length})</h3>
-${renderCards(cards)}`);
-  }
-
-  const otherCards = Array.from(byStatus.entries())
-    .filter(([status]) => !knownStatuses.has(status))
-    .flatMap(([, cards]) => cards);
-
-  if (otherCards.length > 0) {
-    sections.push(`<h3 style="border-left: 4px solid #6b7280">Other (${otherCards.length})</h3>
-${renderCards(otherCards)}`);
-  }
-
-  return `<div class="task-board">
-${sections.join('\n')}
-</div>`;
-}
-
-function renderPublicItems(group: SenderGroup): string {
-  if (group.key !== 'tasks') {
-    return renderPublicCountOnly(group);
-  }
-  return renderPublicTaskBoard(group);
+    main {
+      max-width: 720px;
+      margin: 0 auto;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 18px 20px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.4rem;
+    }
+    .meta, .footer {
+      color: var(--muted);
+      margin: 0;
+      font-size: 0.95rem;
+    }
+    ul {
+      margin: 16px 0;
+      padding-left: 20px;
+    }
+    li {
+      margin: 6px 0;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>active maintenance tickets</h1>
+    <p class="meta">updated ${escapeHtml(updatedAt)}</p>
+    ${body}
+    <p class="footer">details are on the ops page (sign-in required).</p>
+  </main>
+</body>
+</html>`;
 }
 
 function filterTaskItemsByStatus(items: DigestItem[]): DigestItem[] {
@@ -522,6 +557,10 @@ ${sections.join('\n')}
 }
 
 function buildDigestHtml(groups: SenderGroup[], now: Date, mode: DigestRenderMode = 'local'): string {
+  if (mode === 'public') {
+    return renderPublicDigest(groups, now);
+  }
+
   const { groups: allowedGroups } = config.digest;
   const visibleGroups = groups
     .map((group): SenderGroup => {
@@ -571,7 +610,7 @@ function buildDigestHtml(groups: SenderGroup[], now: Date, mode: DigestRenderMod
     return `
     <section>
       <h2>${escapeHtml(label)} (${displayCount})</h2>
-      ${mode === 'public' ? renderPublicItems(group) : renderItems(group)}
+      ${renderItems(group)}
     </section>
   `;
   });

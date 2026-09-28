@@ -6,6 +6,8 @@ export interface DigestItem {
   sender_email?: string;
   external_id: string;
   house_id?: string;
+  /** Structured ticket category only: repair, lock, leak, or other. Not free text. */
+  ticket_category?: string;
   tenant_id?: string;
   tenant_name?: string;
   subject?: string;
