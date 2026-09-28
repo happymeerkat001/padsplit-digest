@@ -1,16 +1,16 @@
 import cron from 'node-cron';
 import { existsSync, readdirSync, unlinkSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { getPadsplitCookies } from './api/auth.js';
 import { AuthError, setSessionCookie } from './api/client.js';
 import { fetchMessages } from './api/messages.js';
 import { fetchTickets, ticketsToInboxMessages } from './api/tickets.js';
 import { classifyPendingItems } from './classifier/index.js';
 import { config, resolveSenderCategory, validateConfig } from './config.js';
-import { firebaseDeploy, generateHistoryPage, publishToPublic } from './deploy/publish.js';
+import { firebaseDeploy, generateHistoryPage, publishRenderedDigest } from './deploy/publish.js';
 import { closeDb, getDb } from './db/init.js';
 import { insertItem, itemExists } from './db/items.js';
-import { buildDigest } from './digest/builder.js';
+import { buildDigest, renderDigestPage } from './digest/builder.js';
 import { logger } from './utils/logger.js';
 
 let lastDeployedAt = 0;
@@ -125,7 +125,8 @@ async function runPipeline(): Promise<void> {
 
     if (digest.reportPath) {
       logger.info('Step 4: Publishing to Firebase Hosting');
-      published = publishToPublic(digest.reportPath);
+      const publicHtml = renderDigestPage(digest.groups, digest.generatedAt, 'public');
+      published = publishRenderedDigest(publicHtml, basename(digest.reportPath));
       historyPath = generateHistoryPage();
       pruneOutReports();
 

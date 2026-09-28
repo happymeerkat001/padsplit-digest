@@ -13,11 +13,13 @@ import {
 } from '../db/items.js'; // boundary in/out
 import { logger } from '../utils/logger.js'; // boundary out
 
-interface SenderGroup {
+export interface SenderGroup {
   key: string;
   label: string;
   items: DigestItem[];
 }
+
+export type DigestRenderMode = 'local' | 'public';
 
 const TASK_COLUMNS = [
   { status: 'Requests', color: '#555555' },
@@ -136,6 +138,217 @@ function parseTaskDetails(item: DigestItem): {
     description: content.slice(2).join(' ') || '(No description)',
     status: status || 'Other',
   };
+}
+
+/**
+ * Public page (public/ and Firebase Hosting only).
+ *
+ * One line per house: "{house} · {n} open · oldest {k} days", plus a ticket
+ * category only when ticket_category is exactly repair, lock, leak, or other.
+ * The house name is house_id only when that value is a letter label with no
+ * digits and is not copied from subject, body, sender, or tenant text.
+ * Subject, description, room, and member rows are never printed.
+ * Local digest HTML is unchanged. Neither mode embeds a site password or PIN.
+ */
+const PUBLIC_TICKET_CATEGORIES = ['repair', 'lock', 'leak', 'other'] as const;
+
+const CLOSED_TICKET_STATUSES = new Set([
+  'complete',
+  'completed',
+  'closed',
+  'resolved',
+  'cancelled',
+  'canceled',
+  'done',
+]);
+
+function structuredHouseLabel(item: DigestItem): string | null {
+  const label = item.house_id?.trim() ?? '';
+  if (!/^[A-Za-z]+(?:[ -][A-Za-z]+)*$/.test(label)) {
+    return null;
+  }
+
+  const needle = label.toLowerCase();
+  const freeText = [item.subject, item.body_raw, item.body_resolved, item.sender_email, item.tenant_name];
+  if (freeText.some((value) => (value ?? '').toLowerCase().includes(needle))) {
+    return null;
+  }
+
+  return label;
+}
+
+function structuredTicketCategory(item: DigestItem): (typeof PUBLIC_TICKET_CATEGORIES)[number] | null {
+  const raw = item.ticket_category?.trim().toLowerCase() ?? '';
+  if ((PUBLIC_TICKET_CATEGORIES as readonly string[]).includes(raw)) {
+    return raw as (typeof PUBLIC_TICKET_CATEGORIES)[number];
+  }
+  return null;
+}
+
+function isOpenMaintenanceTicket(item: DigestItem): boolean {
+  const status = parseTaskDetails(item).status.trim().toLowerCase();
+  return !CLOSED_TICKET_STATUSES.has(status);
+}
+
+function ageInDays(receivedAt: string, now: Date): number {
+  const then = new Date(receivedAt).getTime();
+  if (Number.isNaN(then)) {
+    return 0;
+  }
+  const diff = now.getTime() - then;
+  if (diff <= 0) {
+    return 0;
+  }
+  return Math.floor(diff / 86_400_000);
+}
+
+function houseGroupKey(item: DigestItem): string {
+  const label = structuredHouseLabel(item);
+  if (label) {
+    return `name:${label.toLowerCase()}`;
+  }
+  const houseId = item.house_id?.trim();
+  if (houseId) {
+    return `id:${houseId}`;
+  }
+  const subject = item.subject?.trim();
+  if (subject) {
+    return `subject:${subject}`;
+  }
+  return 'unknown';
+}
+
+function formatPublicHouseLine(
+  label: string | null,
+  count: number,
+  oldestDays: number,
+  categories: ReadonlySet<string>,
+): string {
+  const dayWord = oldestDays === 1 ? 'day' : 'days';
+  const parts: string[] = [];
+  if (label) {
+    parts.push(label);
+  }
+  parts.push(`${count} open`);
+  parts.push(`oldest ${oldestDays} ${dayWord}`);
+  for (const category of PUBLIC_TICKET_CATEGORIES) {
+    if (categories.has(category)) {
+      parts.push(category);
+    }
+  }
+  return parts.join(' · ');
+}
+
+function renderPublicDigest(groups: SenderGroup[], now: Date): string {
+  const tickets = groups
+    .filter((group) => group.key === 'tasks')
+    .flatMap((group) => group.items)
+    .filter((item) => isOpenMaintenanceTicket(item));
+
+  const grouped = new Map<string, { label: string | null; items: DigestItem[] }>();
+  for (const item of tickets) {
+    const key = houseGroupKey(item);
+    const bucket = grouped.get(key) ?? { label: structuredHouseLabel(item), items: [] };
+    if (!bucket.label) {
+      bucket.label = structuredHouseLabel(item);
+    }
+    bucket.items.push(item);
+    grouped.set(key, bucket);
+  }
+
+  const lines = Array.from(grouped.entries())
+    .map(([key, bucket]) => {
+      const ages = bucket.items.map((item) => ageInDays(item.received_at, now));
+      const oldestDays = ages.reduce((max, age) => Math.max(max, age), 0);
+      const categories = new Set<string>();
+      for (const item of bucket.items) {
+        const category = structuredTicketCategory(item);
+        if (category) {
+          categories.add(category);
+        }
+      }
+      const label = bucket.items.every((item) => structuredHouseLabel(item) === bucket.label)
+        ? bucket.label
+        : null;
+      return {
+        key,
+        text: formatPublicHouseLine(label, bucket.items.length, oldestDays, categories),
+      };
+    })
+    .sort((a, b) => a.text.localeCompare(b.text) || a.key.localeCompare(b.key));
+
+  const updatedAt = now.toLocaleString('en-US', {
+    timeZone: config.schedule.timezone,
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+
+  const body = lines.length
+    ? `<ul>
+    ${lines.map((line) => `<li>${escapeHtml(line.text)}</li>`).join('\n    ')}
+  </ul>`
+    : '<p>no open tickets.</p>';
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>active maintenance tickets</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fa;
+      --card: #ffffff;
+      --text: #1e293b;
+      --muted: #64748b;
+      --line: #dce3ea;
+    }
+    body {
+      margin: 0;
+      padding: 24px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    }
+    main {
+      max-width: 720px;
+      margin: 0 auto;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 18px 20px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.4rem;
+    }
+    .meta, .footer {
+      color: var(--muted);
+      margin: 0;
+      font-size: 0.95rem;
+    }
+    ul {
+      margin: 16px 0;
+      padding-left: 20px;
+    }
+    li {
+      margin: 6px 0;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>active maintenance tickets</h1>
+    <p class="meta">updated ${escapeHtml(updatedAt)}</p>
+    ${body}
+    <p class="footer">details are on the ops page (sign-in required).</p>
+  </main>
+</body>
+</html>`;
 }
 
 function filterTaskItemsByStatus(items: DigestItem[]): DigestItem[] {
@@ -343,8 +556,11 @@ ${sections.join('\n')}
   </table>`;
 }
 
-function buildDigestHtml(groups: SenderGroup[], now: Date): string {
-  const sitePassword = process.env['DIGEST_SITE_PASSWORD'] || 'LiNest@2025';
+function buildDigestHtml(groups: SenderGroup[], now: Date, mode: DigestRenderMode = 'local'): string {
+  if (mode === 'public') {
+    return renderPublicDigest(groups, now);
+  }
+
   const { groups: allowedGroups } = config.digest;
   const visibleGroups = groups
     .map((group): SenderGroup => {
@@ -403,20 +619,6 @@ function buildDigestHtml(groups: SenderGroup[], now: Date): string {
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <script>
-    (function() {
-      const authKey = 'padsplit_lock';
-      if (sessionStorage.getItem(authKey) !== 'true') {
-        const input = prompt("Enter Password:");
-        if (input === "${sitePassword}") {
-          sessionStorage.setItem(authKey, 'true');
-        } else {
-          document.documentElement.innerHTML = '<h1>Access Denied</h1>';
-          window.stop();
-        }
-      }
-    })();
-  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>PadSplit Daily Digest</title>
   <style>
@@ -524,68 +726,9 @@ function buildDigestHtml(groups: SenderGroup[], now: Date): string {
     li {
       margin: 6px 0;
     }
-    #auth-overlay {
-      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-      background: rgba(15, 17, 23, 0.98);
-      display: flex; flex-direction: column; justify-content: center; align-items: center;
-      z-index: 9999; color: white; font-family: sans-serif;
-    }
-    .pin-input {
-      background: #1a1d27; border: 1px solid #2e3144; color: white;
-      padding: 12px; font-size: 24px; text-align: center; width: 150px;
-      border-radius: 8px; margin-top: 20px; outline: none;
-    }
-    .hidden { display: none !important; }
-    body.locked { overflow: hidden; }
   </style>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-      const SECRET_PIN = "9999"; // Set your preferred 4-digit PIN here
-      const overlay = document.getElementById('auth-overlay');
-      const pinInput = document.getElementById('pin');
-      const errorEl = document.getElementById('error');
-
-      if (!overlay || !(pinInput instanceof HTMLInputElement) || !errorEl) {
-        return;
-      }
-
-      const authorize = () => {
-        overlay.classList.add('hidden');
-        document.body.classList.remove('locked');
-        sessionStorage.setItem('authorized', 'true');
-      };
-
-      if (sessionStorage.getItem('authorized') === 'true') {
-        authorize();
-        return;
-      }
-
-      document.body.classList.add('locked');
-      pinInput.addEventListener('input', (e) => {
-        const target = e.target;
-        if (!(target instanceof HTMLInputElement)) {
-          return;
-        }
-        const value = target.value || '';
-        if (value === SECRET_PIN) {
-          authorize();
-        } else if (value.length === 4) {
-          errorEl.style.display = 'block';
-          target.value = '';
-        } else {
-          errorEl.style.display = 'none';
-        }
-      });
-    });
-  </script>
 </head>
 <body>
-  <div id="auth-overlay">
-    <h2>Assurance REI Digest</h2>
-    <p>Enter PIN to view maintenance tasks</p>
-    <input type="password" id="pin" class="pin-input" maxlength="4" autofocus>
-    <p id="error" style="color: #ef4444; margin-top: 10px; display: none;">Incorrect PIN</p>
-  </div>
   <main>
     <header>
       <h1>PadSplit Daily Digest</h1>
@@ -599,6 +742,14 @@ function buildDigestHtml(groups: SenderGroup[], now: Date): string {
 </html>`;
 }
 
+export function renderDigestPage(
+  groups: SenderGroup[],
+  now: Date,
+  mode: DigestRenderMode,
+): string {
+  return buildDigestHtml(groups, now, mode);
+}
+
 function writeDigestReport(html: string, now: Date): string {
   const outDir = resolve(process.cwd(), 'out');
   mkdirSync(outDir, { recursive: true });
@@ -610,7 +761,12 @@ function writeDigestReport(html: string, now: Date): string {
   return outputPath;
 }
 
-export async function buildDigest(newItemCount = 0): Promise<{ itemCount: number; reportPath: string }> { // export ( newItemCount Input)  
+export async function buildDigest(newItemCount = 0): Promise<{
+  itemCount: number;
+  reportPath: string;
+  groups: SenderGroup[];
+  generatedAt: Date;
+}> {
   const items = getVisibleClassifiedItems(config.digest.visibilityWindowHours); // boundary in
   const groups = groupBySenderCategory(items); // computation/transformation
 
@@ -624,11 +780,11 @@ export async function buildDigest(newItemCount = 0): Promise<{ itemCount: number
       visibleItemsHash,
       itemCount: items.length,
     });
-    return { itemCount: items.length, reportPath: '' }; // early return for no-op case
+    return { itemCount: items.length, reportPath: '', groups: [], generatedAt: new Date() };
   }
 
   const now = new Date();
-  const html = buildDigestHtml(groups, now);
+  const html = renderDigestPage(groups, now, 'local');
   const reportPath = writeDigestReport(html, now);
 
   const digestId = createDigest({
@@ -650,5 +806,5 @@ export async function buildDigest(newItemCount = 0): Promise<{ itemCount: number
     digestId,
   });
 
-  return { itemCount: items.length, reportPath };
+  return { itemCount: items.length, reportPath, groups, generatedAt: now };
 }

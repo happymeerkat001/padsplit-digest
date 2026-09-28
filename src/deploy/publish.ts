@@ -44,6 +44,32 @@ function parseTimestampFromFilename(filename: string): string {
   });
 }
 
+export function publishRenderedDigest(html: string, archiveFilename: string): {
+  latestPath: string;
+  archivePath: string;
+} {
+  if (!/^digest-\d{8}-\d{6}\.html$/.test(archiveFilename)) {
+    throw new Error('Unexpected digest archive filename');
+  }
+
+  mkdirSync(PUBLIC_DIR, { recursive: true });
+  mkdirSync(ARCHIVES_DIR, { recursive: true });
+
+  const latestPath = resolve(PUBLIC_DIR, 'index.html');
+  const archivePath = resolve(ARCHIVES_DIR, archiveFilename);
+  writeFileSync(latestPath, html, 'utf-8');
+  writeFileSync(archivePath, html, 'utf-8');
+
+  logger.info('Published public digest', {
+    latestPath,
+    archivePath,
+  });
+
+  return { latestPath, archivePath };
+}
+
+// Byte copy of an existing report. Hosted pages are written by publishRenderedDigest
+// from renderDigestPage(..., 'public') so member text and client secrets stay out of public/.
 export function publishToPublic(reportPath: string): {
   latestPath: string;
   archivePath: string;
