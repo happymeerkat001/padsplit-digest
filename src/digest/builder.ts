@@ -13,11 +13,13 @@ import {
 } from '../db/items.js'; // boundary in/out
 import { logger } from '../utils/logger.js'; // boundary out
 
-interface SenderGroup {
+export interface SenderGroup {
   key: string;
   label: string;
   items: DigestItem[];
 }
+
+export type DigestRenderMode = 'local' | 'public';
 
 const TASK_COLUMNS = [
   { status: 'Requests', color: '#555555' },
@@ -136,6 +138,182 @@ function parseTaskDetails(item: DigestItem): {
     description: content.slice(2).join(' ') || '(No description)',
     status: status || 'Other',
   };
+}
+
+/**
+ * Public digest policy (files copied to public/ and Firebase Hosting only).
+ *
+ * Kept:
+ * - Counts: total, urgent, per-section, and per-status task counts.
+ * - Known status labels (Open, In Progress, and the other fixed columns). They are
+ *   count buckets. Unrecognized status text is counted under "Other" and not printed.
+ * - Ticket subject (`item.subject`) when it is not copied from body_raw, sender_email,
+ *   or tenant_name. The ticket adapter stores the property address in subject.
+ * - Task type only for the structured label this codebase writes ("Type: Maintenance Ticket").
+ *   Any other first body line is free text and is dropped.
+ * - Room only when it matches a short room-label allowlist ("Bedroom", "Room 2", ...).
+ *   parseTaskDetails reads room from body line 2. The ticket adapter puts the free-text
+ *   ticket description in that slot, so those values fail the allowlist and are omitted.
+ *
+ * Omitted from the public page:
+ * - Member-message rows and all other non-task rows (those sections are counts only).
+ * - sender_email, tenant_name, body_raw, and the parsed description.
+ *
+ * Local digest HTML still renders member rows and task descriptions. Neither mode
+ * embeds DIGEST_SITE_PASSWORD or SECRET_PIN.
+ */
+const PUBLIC_TASK_TYPES = new Set(['type: maintenance ticket']);
+
+const PUBLIC_ROOM_LABELS = new Set([
+  'bedroom',
+  'bathroom',
+  'kitchen',
+  'living room',
+  'hallway',
+  'basement',
+  'attic',
+  'laundry',
+  'common area',
+  'exterior',
+]);
+
+function publicTaskType(taskType: string): string | null {
+  const trimmed = taskType.trim();
+  if (!PUBLIC_TASK_TYPES.has(trimmed.toLowerCase())) {
+    return null;
+  }
+  return trimmed;
+}
+
+function publicRoomLabel(room: string): string | null {
+  const trimmed = room.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (PUBLIC_ROOM_LABELS.has(trimmed.toLowerCase())) {
+    return trimmed;
+  }
+  if (/^room\s+[a-z0-9-]{1,8}$/i.test(trimmed)) {
+    return trimmed;
+  }
+  return null;
+}
+
+function publicTicketSubject(item: DigestItem): string | null {
+  const subject = (item.subject || '').trim();
+  if (!subject) {
+    return null;
+  }
+
+  const body = item.body_raw ?? '';
+  if (body.includes(subject)) {
+    return null;
+  }
+
+  const identities = [item.sender_email, item.tenant_name]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+
+  if (identities.some((value) => subject.includes(value) || value.includes(subject))) {
+    return null;
+  }
+
+  return subject;
+}
+
+function publicUrgency(value: DigestItem['urgency']): string {
+  if (value === 'high' || value === 'medium' || value === 'low') {
+    return value;
+  }
+  return 'unknown';
+}
+
+function renderPublicCountOnly(group: SenderGroup): string {
+  const urgent = group.items.filter((item) => item.urgency === 'high').length;
+  return `<p class="meta">${group.items.length} items · ${urgent} urgent. Item details are omitted from the public digest.</p>`;
+}
+
+function renderPublicTaskBoard(group: SenderGroup): string {
+  const byStatus = new Map<string, Array<{
+    item: DigestItem;
+    taskType: string | null;
+    room: string | null;
+  }>>();
+
+  for (const item of group.items) {
+    const parsed = parseTaskDetails(item);
+    const statusKey = parsed.status || 'Other';
+    const bucket = byStatus.get(statusKey) ?? [];
+    bucket.push({
+      item,
+      taskType: publicTaskType(parsed.taskType),
+      room: publicRoomLabel(parsed.room),
+    });
+    byStatus.set(statusKey, bucket);
+  }
+
+  const { taskStatuses } = config.digest;
+  if (taskStatuses.length > 0) {
+    const allowedStatuses = new Set(taskStatuses);
+    for (const key of Array.from(byStatus.keys())) {
+      if (!allowedStatuses.has(key)) {
+        byStatus.delete(key);
+      }
+    }
+  }
+
+  const knownStatuses = new Set<string>(TASK_COLUMNS.map((column) => column.status));
+  const sections: string[] = [];
+
+  const renderCards = (
+    cards: Array<{ item: DigestItem; taskType: string | null; room: string | null }>,
+  ): string =>
+    cards
+      .map(({ item, taskType, room }) => {
+        const receivedAt = new Date(item.received_at).toLocaleString('en-US', {
+          timeZone: config.schedule.timezone,
+        });
+        const subject = publicTicketSubject(item);
+        const meta = [taskType, room].filter((part): part is string => Boolean(part)).join(' | ');
+        const urgency = publicUrgency(item.urgency);
+
+        return `<div class="task-card">
+  ${subject ? `<div class="task-address">${escapeHtml(subject)}</div>` : ''}
+  ${meta ? `<div class="task-meta">${escapeHtml(meta)}</div>` : ''}
+  <div class="task-footer">${escapeHtml(urgency)} · ${escapeHtml(receivedAt)}</div>
+</div>`;
+      })
+      .join('\n');
+
+  for (const column of TASK_COLUMNS) {
+    const cards = byStatus.get(column.status) ?? [];
+    if (cards.length === 0) {
+      continue;
+    }
+
+    sections.push(`<h3 style="border-left: 4px solid ${column.color}">${escapeHtml(column.status)} (${cards.length})</h3>
+${renderCards(cards)}`);
+  }
+
+  const otherCards = Array.from(byStatus.entries())
+    .filter(([status]) => !knownStatuses.has(status))
+    .flatMap(([, cards]) => cards);
+
+  if (otherCards.length > 0) {
+    sections.push(`<h3 style="border-left: 4px solid #6b7280">Other (${otherCards.length})</h3>
+${renderCards(otherCards)}`);
+  }
+
+  return `<div class="task-board">
+${sections.join('\n')}
+</div>`;
+}
+
+function renderPublicItems(group: SenderGroup): string {
+  if (group.key !== 'tasks') {
+    return renderPublicCountOnly(group);
+  }
+  return renderPublicTaskBoard(group);
 }
 
 function filterTaskItemsByStatus(items: DigestItem[]): DigestItem[] {
@@ -343,8 +521,7 @@ ${sections.join('\n')}
   </table>`;
 }
 
-function buildDigestHtml(groups: SenderGroup[], now: Date): string {
-  const sitePassword = process.env['DIGEST_SITE_PASSWORD'] || 'LiNest@2025';
+function buildDigestHtml(groups: SenderGroup[], now: Date, mode: DigestRenderMode = 'local'): string {
   const { groups: allowedGroups } = config.digest;
   const visibleGroups = groups
     .map((group): SenderGroup => {
@@ -394,7 +571,7 @@ function buildDigestHtml(groups: SenderGroup[], now: Date): string {
     return `
     <section>
       <h2>${escapeHtml(label)} (${displayCount})</h2>
-      ${renderItems(group)}
+      ${mode === 'public' ? renderPublicItems(group) : renderItems(group)}
     </section>
   `;
   });
@@ -403,20 +580,6 @@ function buildDigestHtml(groups: SenderGroup[], now: Date): string {
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <script>
-    (function() {
-      const authKey = 'padsplit_lock';
-      if (sessionStorage.getItem(authKey) !== 'true') {
-        const input = prompt("Enter Password:");
-        if (input === "${sitePassword}") {
-          sessionStorage.setItem(authKey, 'true');
-        } else {
-          document.documentElement.innerHTML = '<h1>Access Denied</h1>';
-          window.stop();
-        }
-      }
-    })();
-  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>PadSplit Daily Digest</title>
   <style>
@@ -524,68 +687,9 @@ function buildDigestHtml(groups: SenderGroup[], now: Date): string {
     li {
       margin: 6px 0;
     }
-    #auth-overlay {
-      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-      background: rgba(15, 17, 23, 0.98);
-      display: flex; flex-direction: column; justify-content: center; align-items: center;
-      z-index: 9999; color: white; font-family: sans-serif;
-    }
-    .pin-input {
-      background: #1a1d27; border: 1px solid #2e3144; color: white;
-      padding: 12px; font-size: 24px; text-align: center; width: 150px;
-      border-radius: 8px; margin-top: 20px; outline: none;
-    }
-    .hidden { display: none !important; }
-    body.locked { overflow: hidden; }
   </style>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-      const SECRET_PIN = "9999"; // Set your preferred 4-digit PIN here
-      const overlay = document.getElementById('auth-overlay');
-      const pinInput = document.getElementById('pin');
-      const errorEl = document.getElementById('error');
-
-      if (!overlay || !(pinInput instanceof HTMLInputElement) || !errorEl) {
-        return;
-      }
-
-      const authorize = () => {
-        overlay.classList.add('hidden');
-        document.body.classList.remove('locked');
-        sessionStorage.setItem('authorized', 'true');
-      };
-
-      if (sessionStorage.getItem('authorized') === 'true') {
-        authorize();
-        return;
-      }
-
-      document.body.classList.add('locked');
-      pinInput.addEventListener('input', (e) => {
-        const target = e.target;
-        if (!(target instanceof HTMLInputElement)) {
-          return;
-        }
-        const value = target.value || '';
-        if (value === SECRET_PIN) {
-          authorize();
-        } else if (value.length === 4) {
-          errorEl.style.display = 'block';
-          target.value = '';
-        } else {
-          errorEl.style.display = 'none';
-        }
-      });
-    });
-  </script>
 </head>
 <body>
-  <div id="auth-overlay">
-    <h2>Assurance REI Digest</h2>
-    <p>Enter PIN to view maintenance tasks</p>
-    <input type="password" id="pin" class="pin-input" maxlength="4" autofocus>
-    <p id="error" style="color: #ef4444; margin-top: 10px; display: none;">Incorrect PIN</p>
-  </div>
   <main>
     <header>
       <h1>PadSplit Daily Digest</h1>
@@ -599,6 +703,14 @@ function buildDigestHtml(groups: SenderGroup[], now: Date): string {
 </html>`;
 }
 
+export function renderDigestPage(
+  groups: SenderGroup[],
+  now: Date,
+  mode: DigestRenderMode,
+): string {
+  return buildDigestHtml(groups, now, mode);
+}
+
 function writeDigestReport(html: string, now: Date): string {
   const outDir = resolve(process.cwd(), 'out');
   mkdirSync(outDir, { recursive: true });
@@ -610,7 +722,12 @@ function writeDigestReport(html: string, now: Date): string {
   return outputPath;
 }
 
-export async function buildDigest(newItemCount = 0): Promise<{ itemCount: number; reportPath: string }> { // export ( newItemCount Input)  
+export async function buildDigest(newItemCount = 0): Promise<{
+  itemCount: number;
+  reportPath: string;
+  groups: SenderGroup[];
+  generatedAt: Date;
+}> {
   const items = getVisibleClassifiedItems(config.digest.visibilityWindowHours); // boundary in
   const groups = groupBySenderCategory(items); // computation/transformation
 
@@ -624,11 +741,11 @@ export async function buildDigest(newItemCount = 0): Promise<{ itemCount: number
       visibleItemsHash,
       itemCount: items.length,
     });
-    return { itemCount: items.length, reportPath: '' }; // early return for no-op case
+    return { itemCount: items.length, reportPath: '', groups: [], generatedAt: new Date() };
   }
 
   const now = new Date();
-  const html = buildDigestHtml(groups, now);
+  const html = renderDigestPage(groups, now, 'local');
   const reportPath = writeDigestReport(html, now);
 
   const digestId = createDigest({
@@ -650,5 +767,5 @@ export async function buildDigest(newItemCount = 0): Promise<{ itemCount: number
     digestId,
   });
 
-  return { itemCount: items.length, reportPath };
+  return { itemCount: items.length, reportPath, groups, generatedAt: now };
 }
